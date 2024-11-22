@@ -11,16 +11,13 @@ if TYPE_CHECKING:
     )
 
 import numpy as np
+import plotly.graph_objs as go
 
 from nomad.config import config
 from nomad.datamodel.data import Schema
 from nomad.datamodel.metainfo.annotations import ELNAnnotation, ELNComponentEnum
 from nomad.datamodel.metainfo.plot import PlotSection, PlotlyFigure
 from nomad.metainfo import Quantity, SchemaPackage
-
-configuration = config.get_plugin_entry_point(
-    'nomad_parser_plugin_boss.schema_packages:schema_package_entry_point'
-)
 
 m_package = SchemaPackage()
 
@@ -69,22 +66,17 @@ class PotentialEnergySurfaceFit(PlotSection, Schema):
 
             self.figures.append(
                 PlotlyFigure(
-                    name='Potential Energy Surface',
-                    data=[
-                        dict(
-                            x=self.parameter_values[0],
-                            y=self.parameter_values[1],
-                            z=self.energy_values,
-                            type='contour',
-                            labels=dict(
-                                x=self.parameter_1_name,
-                                y=self.parameter_2_name,
-                                z='Energy',
-                            ),
-                        ),
-                    ],
-                )
-            )
+                    label='Potential Energy Surface',
+                    figure=go.Figure(
+                        data=go.Contour(
+                            x=self.parameter_1_values,
+                            y=self.parameter_2_values,
+                            z=self.energy_values.magnitude,
+                            colorbar=dict(title='Energy'),
+                        )
+                    ).to_plotly_json(),
+                ),
+            ),
         except Exception as e:
             pass
 

@@ -54,7 +54,7 @@ class BossPostProcessingParser(MatchingParser):
         slice_parser.parse()
 
         def get_column_unique(column_name: str) -> list[float]:
-            return list({x.get(column_name) for x in slice_parser.results.get('row', [])})
+            return np.sort(list({x.get(column_name) for x in slice_parser.results.get('row', [])}))
 
         def get_column(column_name: str) -> list[float]:
             return [x.get(column_name) for x in slice_parser.results.get('row', [])]
@@ -67,7 +67,7 @@ class BossPostProcessingParser(MatchingParser):
 
         x_1, x_2 = get_column_unique('x_1'), get_column_unique('x_2')
 
-        archive.m_add_sub_section(EntryArchive.data,
+        archive.m_add_sub_section(EntryArchive.data, 
             PotentialEnergySurfaceFit(
                 parameter_1_name='parameter_1_name',
                 parameter_1_values=x_1,
@@ -75,6 +75,5 @@ class BossPostProcessingParser(MatchingParser):
                 parameter_2_values=x_2,
                 energy_values=reshaping(get_column('mu'), len(x_1), len(x_2)),
                 energy_variance=reshaping(get_column('nu'), len(x_1), len(x_2)),
-            )
+            )                      
         )
-        
