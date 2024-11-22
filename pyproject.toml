@@ -112,10 +112,9 @@ where = ["src"]
 
 [project.entry-points.'nomad.plugin']
 parser_entry_point = "nomad_parser_plugin_boss.parsers:parser_entry_point"
-schema_package_entry_point = "nomad_parser_plugin_boss.schema_packages:schema_package_entry_point"
+# schema_package_entry_point = "nomad_parser_plugin_boss.schema_packages:schema_package_entry_point"
+# example_upload_entry_point = "nomad_parser_plugin_boss.example_uploads:example_upload_entry_point"
 
-
-example_upload_entry_point = "nomad_parser_plugin_boss.example_uploads:example_upload_entry_point"
 [tool.cruft]
 # Avoid updating workflow files, this leads to permissions issues
 skip = [".github/*"]

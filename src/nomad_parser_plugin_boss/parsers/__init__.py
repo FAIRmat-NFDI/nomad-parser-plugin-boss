@@ -2,17 +2,18 @@ from nomad.config.models.plugins import ParserEntryPoint
 from pydantic import Field
 
 
-class NewParserEntryPoint(ParserEntryPoint):
+class BossParserEntryPoint(ParserEntryPoint):
     parameter: int = Field(0, description='Custom configuration parameter')
 
     def load(self):
-        from nomad_parser_plugin_boss.parsers.parser import NewParser
+        from nomad_parser_plugin_boss.parsers.parser import BossPostProcessingParser
 
-        return NewParser(**self.dict())
+        return BossPostProcessingParser(**self.dict())
 
 
-parser_entry_point = NewParserEntryPoint(
-    name='NewParser',
+parser_entry_point = BossParserEntryPoint(
+    name='BossParser',
     description='New parser entry point configuration.',
-    mainfile_name_re='.*\.newmainfilename',
+    mainfile_name_re='.*it\d+_npts\d+\.dat',
+    mainfile_contents_re='Model output \(x mu nu\)',
 )
