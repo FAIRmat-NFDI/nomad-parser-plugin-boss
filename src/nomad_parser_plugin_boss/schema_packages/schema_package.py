@@ -22,6 +22,9 @@ from nomad.metainfo import Quantity, SchemaPackage
 m_package = SchemaPackage()
 
 
+
+
+
 class PotentialEnergySurfaceFit(PlotSection, Schema):
     # m_def = Section()
 
@@ -63,18 +66,21 @@ class PotentialEnergySurfaceFit(PlotSection, Schema):
         try:
             if self.energy_values.shape != (len(self.parameter_1_values), len(self.parameter_2_values)):
                 raise ValueError('Energy values shape does not match parameter values')  # ?
+            
+            figure = go.Figure(
+                data=go.Contour(
+                    x=self.parameter_1_values,
+                    y=self.parameter_2_values,
+                    z=self.energy_values.magnitude,
+                    colorbar=dict(title='Energy'),
+                )
+            ).to_plotly_json()
+            figure['config'] = {'staticPlot': True}
 
             self.figures.append(
                 PlotlyFigure(
                     label='Potential Energy Surface',
-                    figure=go.Figure(
-                        data=go.Contour(
-                            x=self.parameter_1_values,
-                            y=self.parameter_2_values,
-                            z=self.energy_values.magnitude,
-                            colorbar=dict(title='Energy'),
-                        )
-                    ).to_plotly_json(),
+                    figure=figure,
                 ),
             ),
         except Exception as e:
