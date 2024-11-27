@@ -22,9 +22,6 @@ from nomad.metainfo import Quantity, SchemaPackage
 m_package = SchemaPackage()
 
 
-
-
-
 class PotentialEnergySurfaceFit(PlotSection, Schema):
     # m_def = Section()
 

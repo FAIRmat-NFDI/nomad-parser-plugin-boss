@@ -7,6 +7,7 @@ if TYPE_CHECKING:
         BoundLogger,
     )
 
+from boss.pp.pp_main import PPMain
 import numpy as np
 
 from nomad.config import config
@@ -19,6 +20,21 @@ from nomad_parser_plugin_boss.schema_packages.schema_package import PotentialEne
 configuration = config.get_plugin_entry_point(
     'nomad_parser_plugin_boss.parsers:parser_entry_point'
 )
+
+
+class BossRstParser(MatchingParser):
+    def parse(
+        self,
+        mainfile: str,
+        archive: 'EntryArchive',
+        logger: 'BoundLogger',
+        child_archives: dict[str, 'EntryArchive'] = None,
+    ) -> None:
+        logger.info('BossRstParser.parse', parameter=configuration.parameter)
+
+        # https://cest-group.gitlab.io/boss/_modules/boss/pp/pp_main.html#PPMain.rstfile
+        pp = PPMain(PPMain.from_file(rstfile=mainfile), pp_models=True, pp_acq_funcs=True)  # ? outfile
+        pp.run()
 
 
 class BossSliceParser(TextParser):
