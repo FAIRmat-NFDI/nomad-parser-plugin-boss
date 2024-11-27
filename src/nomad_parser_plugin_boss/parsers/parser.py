@@ -7,8 +7,11 @@ if TYPE_CHECKING:
         BoundLogger,
     )
 
+from boss.bo.results import BOResults
 from boss.pp.pp_main import PPMain
 import numpy as np
+import os
+import re
 
 from nomad.config import config
 from nomad.datamodel.datamodel import EntryArchive
@@ -20,21 +23,6 @@ from nomad_parser_plugin_boss.schema_packages.schema_package import PotentialEne
 configuration = config.get_plugin_entry_point(
     'nomad_parser_plugin_boss.parsers:parser_entry_point'
 )
-
-
-class BossRstParser(MatchingParser):
-    def parse(
-        self,
-        mainfile: str,
-        archive: 'EntryArchive',
-        logger: 'BoundLogger',
-        child_archives: dict[str, 'EntryArchive'] = None,
-    ) -> None:
-        logger.info('BossRstParser.parse', parameter=configuration.parameter)
-
-        # https://cest-group.gitlab.io/boss/_modules/boss/pp/pp_main.html#PPMain.rstfile
-        pp = PPMain(PPMain.from_file(rstfile=mainfile), pp_models=True, pp_acq_funcs=True)  # ? outfile
-        pp.run()
 
 
 class BossSliceParser(TextParser):
@@ -57,19 +45,29 @@ class BossSliceParser(TextParser):
 
 
 class BossPostProcessingParser(MatchingParser):
-    def parse(
+    def is_mainfile(
         self,
-        mainfile: str,
-        archive: 'EntryArchive',
-        logger: 'BoundLogger',
-        child_archives: dict[str, 'EntryArchive'] = None,
-    ) -> None:
-        logger.info('BossPostProcessingParser.parse', parameter=configuration.parameter)
-
-        slice_parser = BossSliceParser(mainfile=mainfile, logger=logger)
+        filename: str,
+        mime: str,
+        buffer: bytes,
+        decoded_buffer: str,
+        compression: str = None,
+    ):
+        if not (res := super().is_mainfile(filename, mime, buffer, decoded_buffer, compression)):
+            return res
+        elif not (datfiles := re.findall(r'kernel_(.*)\.lengthscale', decoded_buffer)):
+            return True
+        else:
+            self.creates_children = True
+            return [x if x else 0 for x in datfiles]
+    
+    def parse_datfile(self, datfile: str, child_archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+        print(datfile)
+        slice_parser = BossSliceParser(mainfile=datfile, logger=logger)
         slice_parser.parse()
 
         def get_column_unique(column_name: str) -> list[float]:
+            print(slice_parser.results.get('row', []))
             return np.sort(list({x.get(column_name) for x in slice_parser.results.get('row', [])}))
 
         def get_column(column_name: str) -> list[float]:
@@ -83,7 +81,7 @@ class BossPostProcessingParser(MatchingParser):
 
         x_1, x_2 = get_column_unique('x_1'), get_column_unique('x_2')
 
-        archive.m_add_sub_section(EntryArchive.data, 
+        child_archive.m_add_sub_section(EntryArchive.data, 
             PotentialEnergySurfaceFit(
                 parameter_1_name='parameter_1_name',
                 parameter_1_values=x_1,
@@ -93,3 +91,24 @@ class BossPostProcessingParser(MatchingParser):
                 energy_variance=reshaping(get_column('nu'), len(x_1), len(x_2)),
             )                      
         )
+
+    def parse(
+        self,
+        mainfile: str,
+        archive: 'EntryArchive',
+        logger: 'BoundLogger',
+        child_archives: dict[str, 'EntryArchive'] = None,
+    ) -> None:
+        logger.info('BossPostProcessingParser.parse', parameter=configuration.parameter)
+
+        # https://cest-group.gitlab.io/boss/_modules/boss/pp/pp_main.html#PPMain.rstfile
+        pp = PPMain(
+                BOResults.from_file(mainfile, os.path.join(os.path.dirname(mainfile), 'boss.out')),  # or archive.m_context.raw_file for writing
+                pp_iters=[-1],
+                pp_model_slice=[1,2, 50],
+            )
+        pp.run()
+
+        for child_filename, child_archive in child_archives.items():
+            self.parse_datfile(child_filename, child_archive, logger)
+        
