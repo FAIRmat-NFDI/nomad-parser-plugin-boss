@@ -13,17 +13,16 @@ if TYPE_CHECKING:
 import numpy as np
 import plotly.graph_objs as go
 
-from nomad.config import config
 from nomad.datamodel.data import Schema
 from nomad.datamodel.metainfo.annotations import ELNAnnotation, ELNComponentEnum
 from nomad.datamodel.metainfo.plot import PlotSection, PlotlyFigure
-from nomad.metainfo import Quantity, SchemaPackage
+from nomad.metainfo import Quantity, SchemaPackage, Section
 
 m_package = SchemaPackage()
 
 
 class PotentialEnergySurfaceFit(PlotSection, Schema):
-    # m_def = Section()
+    m_def = Section()
 
     parameter_1_name = Quantity(
         type=str,
@@ -79,9 +78,8 @@ class PotentialEnergySurfaceFit(PlotSection, Schema):
                     label='Potential Energy Surface',
                     figure=figure,
                 ),
-            ),
+            )
         except Exception as e:
-            pass
-
+            print(e)
 
 m_package.__init_metainfo__()

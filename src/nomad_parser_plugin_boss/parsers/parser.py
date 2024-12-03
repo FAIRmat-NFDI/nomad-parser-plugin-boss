@@ -8,12 +8,13 @@ if TYPE_CHECKING:
     )
 
 from boss.bo.results import BOResults
+from boss.io.dump import build_query_points
 from boss.pp.pp_main import PPMain
 import numpy as np
 import os
-import re
 
 from nomad.config import config
+from nomad.datamodel.data import EntryData
 from nomad.datamodel.datamodel import EntryArchive
 from nomad.parsing.parser import MatchingParser
 from nomad.parsing.file_parser.text_parser import TextParser, Quantity as TextQuantity
@@ -44,34 +45,20 @@ class BossSliceParser(TextParser):
         ]
 
 
-class BossPostProcessingParser(MatchingParser):
-    def is_mainfile(
-        self,
-        filename: str,
-        mime: str,
-        buffer: bytes,
-        decoded_buffer: str,
-        compression: str = None,
-    ):
-        if not (res := super().is_mainfile(filename, mime, buffer, decoded_buffer, compression)):
-            return res
-        elif not (datfiles := re.findall(r'kernel_(.*)\.lengthscale', decoded_buffer)):
-            return True
-        else:
-            self.creates_children = True
-            return [x if x else 0 for x in datfiles]
-    
-    def parse_datfile(self, datfile: str, child_archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+class BossPostProcessingParser(MatchingParser):    
+    def parse_datfile(self, datfile: str, child_archive: 'EntryArchive', logger: 'BoundLogger') -> list[float]:
         print(datfile)
         slice_parser = BossSliceParser(mainfile=datfile, logger=logger)
         slice_parser.parse()
+        for row in slice_parser.results.get('row', []):
+            yield row
 
+    def save_datfile(self, row: list[float], logger: 'BoundLogger') -> PotentialEnergySurfaceFit:
         def get_column_unique(column_name: str) -> list[float]:
-            print(slice_parser.results.get('row', []))
-            return np.sort(list({x.get(column_name) for x in slice_parser.results.get('row', [])}))
+            return np.sort(list({x.get(column_name) for x in row}))
 
         def get_column(column_name: str) -> list[float]:
-            return [x.get(column_name) for x in slice_parser.results.get('row', [])]
+            return [x.get(column_name) for x in row]
 
         def reshaping(target: list, dim_1: int, dim_2: int) -> np.ndarray:
             if dim_2:
@@ -81,15 +68,13 @@ class BossPostProcessingParser(MatchingParser):
 
         x_1, x_2 = get_column_unique('x_1'), get_column_unique('x_2')
 
-        child_archive.m_add_sub_section(EntryArchive.data, 
-            PotentialEnergySurfaceFit(
-                parameter_1_name='parameter_1_name',
-                parameter_1_values=x_1,
-                parameter_2_name='parameter_2_name',
-                parameter_2_values=x_2,
-                energy_values=reshaping(get_column('mu'), len(x_1), len(x_2)),
-                energy_variance=reshaping(get_column('nu'), len(x_1), len(x_2)),
-            )                      
+        PotentialEnergySurfaceFit(
+            parameter_1_name='parameter_1_name',
+            parameter_1_values=x_1,
+            parameter_2_name='parameter_2_name',
+            parameter_2_values=x_2,
+            energy_values=reshaping(get_column('mu'), len(x_1), len(x_2)),
+            energy_variance=reshaping(get_column('nu'), len(x_1), len(x_2)),
         )
 
     def parse(
@@ -102,13 +87,26 @@ class BossPostProcessingParser(MatchingParser):
         logger.info('BossPostProcessingParser.parse', parameter=configuration.parameter)
 
         # https://cest-group.gitlab.io/boss/_modules/boss/pp/pp_main.html#PPMain.rstfile
+        iter_no = 40
+        res = BOResults.from_file(mainfile, os.path.join(os.path.dirname(mainfile), 'boss.out'))
         pp = PPMain(
-                BOResults.from_file(mainfile, os.path.join(os.path.dirname(mainfile), 'boss.out')),  # or archive.m_context.raw_file for writing
-                pp_iters=[-1],
-                pp_model_slice=[1,2, 50],
-            )
-        pp.run()
+            res,  # or archive.m_context.raw_file for writing
+            pp_models=True, 
+            pp_iters=[iter_no],
+            pp_model_slice=[1, 2, 50],
+        )
+        X = build_query_points(pp.settings, res.select("x_glmin", iter_no))  # ! TODO change to local minima
+        x_1, x_2 = np.unique(X[:, 0]), np.unique(X[:, 1])
+        mu, var = res.reconstruct_model(40).predict(X)
+        mu = mu.reshape(len(x_1), len(x_2))
+        var = var.reshape(len(x_1), len(x_2))
 
-        for child_filename, child_archive in child_archives.items():
-            self.parse_datfile(child_filename, child_archive, logger)
+        archive.data = PotentialEnergySurfaceFit(
+            parameter_1_name='parameter_1_name',
+            parameter_1_values=x_1,
+            parameter_2_name='parameter_2_name',
+            parameter_2_values=x_2,  #! add check
+            energy_values=mu,
+            energy_variance=np.sqrt(var),
+        )
         
