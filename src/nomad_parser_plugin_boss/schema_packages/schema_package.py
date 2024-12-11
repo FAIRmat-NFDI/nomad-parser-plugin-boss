@@ -12,10 +12,9 @@ if TYPE_CHECKING:
 
 import numpy as np
 import plotly.graph_objs as go
-
 from nomad.datamodel.data import Schema
 from nomad.datamodel.metainfo.annotations import ELNAnnotation, ELNComponentEnum
-from nomad.datamodel.metainfo.plot import PlotSection, PlotlyFigure
+from nomad.datamodel.metainfo.plot import PlotlyFigure, PlotSection
 from nomad.metainfo import Quantity, SchemaPackage, Section
 
 m_package = SchemaPackage()

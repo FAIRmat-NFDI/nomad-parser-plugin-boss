@@ -7,19 +7,21 @@ if TYPE_CHECKING:
         BoundLogger,
     )
 
+import os
+
+import numpy as np
 from boss.bo.results import BOResults
 from boss.io.dump import build_query_points
 from boss.pp.pp_main import PPMain
-import numpy as np
-import os
-
 from nomad.config import config
-from nomad.datamodel.data import EntryData
 from nomad.datamodel.datamodel import EntryArchive
+from nomad.parsing.file_parser.text_parser import Quantity as TextQuantity
+from nomad.parsing.file_parser.text_parser import TextParser
 from nomad.parsing.parser import MatchingParser
-from nomad.parsing.file_parser.text_parser import TextParser, Quantity as TextQuantity
 
-from nomad_parser_plugin_boss.schema_packages.schema_package import PotentialEnergySurfaceFit
+from nomad_parser_plugin_boss.schema_packages.schema_package import (
+    PotentialEnergySurfaceFit,
+)
 
 configuration = config.get_plugin_entry_point(
     'nomad_parser_plugin_boss.parsers:parser_entry_point'
