@@ -1,84 +1,52 @@
-from typing import (
-    TYPE_CHECKING,
-)
-
-if TYPE_CHECKING:
-    from nomad.datamodel.datamodel import (
-        EntryArchive,
-    )
-    from structlog.stdlib import (
-        BoundLogger,
-    )
-
 import numpy as np
-import plotly.graph_objs as go
+
 from nomad.datamodel.data import Schema
-from nomad.datamodel.metainfo.annotations import ELNAnnotation, ELNComponentEnum
-from nomad.datamodel.metainfo.plot import PlotlyFigure, PlotSection
+from nomad.datamodel.hdf5 import HDF5Dataset
+from nomad.datamodel.metainfo.annotations import H5WebAnnotation, ELNAnnotation, ELNComponentEnum
 from nomad.metainfo import Quantity, SchemaPackage, Section
 
 m_package = SchemaPackage()
 
 
-class PotentialEnergySurfaceFit(PlotSection, Schema):
-    m_def = Section()
+class PotentialEnergySurfaceFit(Schema):
+    m_def = Section(
+        a_h5web=H5WebAnnotation(
+            title='Potential Energy Surface Fit',
+            axes=['parameter_2', 'parameter_1'],
+            signal='energy_values',
+            # auxialary_singals=['energy_variance'],
+        ),
+    )
 
-    parameter_1_name = Quantity(
+    parameter_names = Quantity(
         type=str,
+        shape=['*'],
         a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
     )
 
-    parameter_1_values = Quantity(
-        type=np.float64,
-        shape=['*'],
+    parameter_1 = Quantity(
+        type=HDF5Dataset,
+        # unit='',
+        shape=[],
     )  # ! TODO use `PhysicalProperty`
-    
-    parameter_2_name = Quantity(
-        type=str,
-        a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
-    )
 
-    parameter_2_values = Quantity(
-        type=np.float64,
-        shape=['*'],
+    parameter_2 = Quantity(
+        type=HDF5Dataset,
+        # unit='',
+        shape=[],
     )  # ! TODO use `PhysicalProperty`
 
     energy_values = Quantity(
-        type=np.float64,
+        type=HDF5Dataset,
         unit='eV',  # ?
-        shape=['*', '*'],
+        shape=[],
     )  # ! TODO use `PhysicalProperty`
 
     energy_variance = Quantity(
-        type=np.float64,
+        type=HDF5Dataset,
         unit='eV^2',  # ?
-        shape=['*', '*'],
+        shape=[],
     )  # ! TODO use `PhysicalProperty`
 
-    def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
-        super(Schema, self).normalize(archive, logger)
-
-        try:
-            if self.energy_values.shape != (len(self.parameter_1_values), len(self.parameter_2_values)):
-                raise ValueError('Energy values shape does not match parameter values')  # ?
-            
-            figure = go.Figure(
-                data=go.Contour(
-                    x=self.parameter_1_values,
-                    y=self.parameter_2_values,
-                    z=self.energy_values.magnitude,
-                    colorbar=dict(title='Energy'),
-                )
-            ).to_plotly_json()
-            figure['config'] = {'staticPlot': True}
-
-            self.figures.append(
-                PlotlyFigure(
-                    label='Potential Energy Surface',
-                    figure=figure,
-                ),
-            )
-        except Exception as e:
-            print(e)
 
 m_package.__init_metainfo__()

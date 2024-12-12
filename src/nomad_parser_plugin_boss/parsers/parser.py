@@ -92,23 +92,22 @@ class BossPostProcessingParser(MatchingParser):
         iter_no = 40
         res = BOResults.from_file(mainfile, os.path.join(os.path.dirname(mainfile), 'boss.out'))
         pp = PPMain(
-            res,  # or archive.m_context.raw_file for writing
+            res,
             pp_models=True, 
             pp_iters=[iter_no],
             pp_model_slice=[1, 2, 50],
         )
         X = build_query_points(pp.settings, res.select("x_glmin", iter_no))  # ! TODO change to local minima
-        x_1, x_2 = np.unique(X[:, 0]), np.unique(X[:, 1])
         mu, var = res.reconstruct_model(40).predict(X)
+
+        x_1, x_2 = np.unique(X[:, 0]), np.unique(X[:, 1])
         mu = mu.reshape(len(x_1), len(x_2))
         var = var.reshape(len(x_1), len(x_2))
 
-        archive.data = PotentialEnergySurfaceFit(
-            parameter_1_name='parameter_1_name',
-            parameter_1_values=x_1,
-            parameter_2_name='parameter_2_name',
-            parameter_2_values=x_2,  #! add check
-            energy_values=mu,
-            energy_variance=np.sqrt(var),
-        )
+        archive.data = PotentialEnergySurfaceFit()
+        archive.data.parameter_names=['x_1', 'x_2']  # !
+        archive.data.parameter_1=x_1
+        archive.data.parameter_2=x_2
+        archive.data.energy_values=mu
+        archive.data.energy_variance=np.sqrt(var)
         
