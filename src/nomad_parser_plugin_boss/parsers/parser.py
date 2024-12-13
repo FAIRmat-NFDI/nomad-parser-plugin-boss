@@ -8,8 +8,8 @@ if TYPE_CHECKING:
     )
 
 import os
-
 import numpy as np
+
 from boss.bo.results import BOResults
 from boss.io.dump import build_query_points
 from boss.pp.pp_main import PPMain
@@ -89,25 +89,46 @@ class BossPostProcessingParser(MatchingParser):
         logger.info('BossPostProcessingParser.parse', parameter=configuration.parameter)
 
         # https://cest-group.gitlab.io/boss/_modules/boss/pp/pp_main.html#PPMain.rstfile
-        iter_no = 40
         res = BOResults.from_file(mainfile, os.path.join(os.path.dirname(mainfile), 'boss.out'))
+        iter_no, no_grid_points = res.settings.get('iterpts', 1), 100  # ! make more robust
         pp = PPMain(
             res,
             pp_models=True, 
             pp_iters=[iter_no],
-            pp_model_slice=[1, 2, 50],
+            pp_model_slice=[1, 2, no_grid_points],
         )
-        X = build_query_points(pp.settings, res.select("x_glmin", iter_no))  # ! TODO change to local minima
-        mu, var = res.reconstruct_model(40).predict(X)
+        bounds = pp.settings.get('bounds', [])
+        ranks = len(bounds)
 
-        x_1, x_2 = np.unique(X[:, 0]), np.unique(X[:, 1])
-        mu = mu.reshape(len(x_1), len(x_2))
-        var = var.reshape(len(x_1), len(x_2))
+        # systematically produce slices over the whole dimension space
+        all_parameter_1, all_parameter_2, mu_all_slices, var_all_slices = [], [], [], []
+
+        for iteration in range(iter_no):
+            all_parameter_1.append([])
+            all_parameter_2.append([])
+            mu_all_slices.append([])
+            var_all_slices.append([])
+
+            for main_rank in range(ranks):
+                for upper_rank in range(main_rank + 1, ranks):
+                    pp = PPMain(
+                        res,
+                        pp_models=True, 
+                        pp_iters=[iteration + 1],
+                        pp_model_slice=[main_rank + 1, upper_rank + 1, no_grid_points],
+                    )
+                    all_parameter_1[iteration].append(np.linspace(bounds[main_rank][0], bounds[main_rank][1], num=no_grid_points))
+                    all_parameter_2[iteration].append(np.linspace(bounds[upper_rank][0], bounds[upper_rank][1], num=no_grid_points))
+
+                    X = build_query_points(pp.settings, res.select("x_glmin", iter_no))  # ! TODO change to local minima
+                    mu, var = res.reconstruct_model(iteration + 1).predict(X)
+                    mu_all_slices[iteration].append(mu.reshape(no_grid_points, no_grid_points))
+                    var_all_slices[iteration].append(var.reshape(no_grid_points, no_grid_points))
 
         archive.data = PotentialEnergySurfaceFit()
-        archive.data.parameter_names=['x_1', 'x_2']  # !
-        archive.data.parameter_1=x_1
-        archive.data.parameter_2=x_2
-        archive.data.energy_values=mu
-        archive.data.energy_variance=np.sqrt(var)
+        # archive.data.parameter_names=['x_1', 'x_2']  # !
+        archive.data.parameter_1 = np.array(all_parameter_1)
+        archive.data.parameter_2 = np.array(all_parameter_2)
+        archive.data.energy_values = np.array(mu_all_slices)
+        archive.data.energy_variance = np.sqrt(var_all_slices)
         

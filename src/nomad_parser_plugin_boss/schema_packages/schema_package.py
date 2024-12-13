@@ -14,7 +14,6 @@ class PotentialEnergySurfaceFit(Schema):
             title='Potential Energy Surface Fit',
             axes=['parameter_2', 'parameter_1'],
             signal='energy_values',
-            # auxialary_singals=['energy_variance'],
         ),
     )
 
