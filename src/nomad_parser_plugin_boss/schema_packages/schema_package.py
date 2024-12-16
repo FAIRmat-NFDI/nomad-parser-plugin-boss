@@ -2,7 +2,11 @@ import numpy as np
 
 from nomad.datamodel.data import Schema, ArchiveSection
 from nomad.datamodel.hdf5 import HDF5Dataset
-from nomad.datamodel.metainfo.annotations import H5WebAnnotation, ELNAnnotation, ELNComponentEnum
+from nomad.datamodel.metainfo.annotations import (
+    H5WebAnnotation,
+    ELNAnnotation,
+    ELNComponentEnum,
+)
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
 
 m_package = SchemaPackage()
@@ -42,13 +46,14 @@ class FittedValue(Schema):
 class PotentialEnergySurfaceFit(Schema):
     m_def = Section(
         a_h5web=H5WebAnnotation(
-            paths=['energy_values/0', 'energy_std/0'],
+            title='Potential Energy Surface Fit',
+            paths=['energy_values', 'energy_std'],
         ),
     )
 
-    energy_values = SubSection(sub_section=FittedValue.m_def, repeats=True)
+    energy_values = SubSection(sub_section=FittedValue.m_def)
 
-    energy_std = SubSection(sub_section=FittedValue.m_def, repeats=True)
+    energy_std = SubSection(sub_section=FittedValue.m_def)
 
 
 m_package.__init_metainfo__()

@@ -15,13 +15,13 @@ from boss.io.dump import build_query_points
 from boss.pp.pp_main import PPMain
 from nomad.config import config
 from nomad.datamodel.datamodel import EntryArchive
+from nomad.datamodel.metainfo.annotations import H5WebAnnotation
 from nomad.parsing.file_parser.text_parser import Quantity as TextQuantity
 from nomad.parsing.file_parser.text_parser import TextParser
 from nomad.parsing.parser import MatchingParser
 
 from nomad_parser_plugin_boss.schema_packages.schema_package import (
     PotentialEnergySurfaceFit,
-    FittedValue,
 )
 
 configuration = config.get_plugin_entry_point(
@@ -115,54 +115,57 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
         ranks = len(bounds)
 
         @staticmethod
+        def generate_slices():
+            for main_rank in range(ranks):
+                for upper_rank in range(main_rank + 1, ranks):
+                    yield main_rank, upper_rank
+
+        @staticmethod
         def compute_parameters(rank: int):
-            return np.linspace(
-                bounds[rank][0], bounds[main_rank][1], num=no_grid_points
-            )
+            return np.linspace(bounds[rank][0], bounds[rank][1], num=no_grid_points)
 
         # systematically produce slices over the whole dimension space
-        all_parameter_1, all_parameter_2 = None, None
-        mu_all_slices, var_all_slices = [], []
+        all_parameter_1, all_parameter_2 = map(
+            list,
+            map(
+                lambda f, x: map(f, x),
+                (compute_parameters, compute_parameters),
+                zip(*generate_slices()),
+            ),
+        )
 
+        mu_all_slices, var_all_slices = [], []
         for iteration in range(iter_no):
             mu_all_slices.append([])
             var_all_slices.append([])
 
-            for main_rank in range(ranks):
-                for upper_rank in range(main_rank + 1, ranks):
-                    if all_parameter_1 is None:
-                        all_parameter_1 = compute_parameters(main_rank)
-                    if all_parameter_2 is None:
-                        all_parameter_2 = compute_parameters(upper_rank)
-
-                    pp = PPMain(
-                        res,
-                        pp_models=True,
-                        pp_iters=[iteration + 1],
-                        pp_model_slice=[main_rank + 1, upper_rank + 1, no_grid_points],
-                    )
-                    X = build_query_points(
-                        pp.settings, res.select('x_glmin', iter_no)
-                    )  # ? change to local minima
-                    mu, var = res.reconstruct_model(iteration + 1).predict(X)
-                    mu_all_slices[iteration].append(
-                        mu.reshape(no_grid_points, no_grid_points)
-                    )
-                    var_all_slices[iteration].append(
-                        var.reshape(no_grid_points, no_grid_points)
-                    )
+            for main_rank, upper_rank in generate_slices():
+                pp = PPMain(
+                    res,
+                    pp_models=True,
+                    pp_iters=[iteration + 1],
+                    pp_model_slice=[main_rank + 1, upper_rank + 1, no_grid_points],
+                )
+                X = build_query_points(
+                    pp.settings, res.select('x_glmin', iter_no)
+                )  # ? change to local minima
+                mu, var = res.reconstruct_model(iteration + 1).predict(X)
+                mu_all_slices[iteration].append(
+                    mu.reshape(no_grid_points, no_grid_points)
+                )
+                var_all_slices[iteration].append(
+                    var.reshape(no_grid_points, no_grid_points)
+                )
 
         # Write to archive
         archive.data = PotentialEnergySurfaceFit()
 
-        section = archive.data.m_setdefault(['energy_values', 0])  # style 1
+        section = archive.data.m_setdefault('energy_values')
         section.signal = np.array(mu_all_slices)
         section.parameter_1 = np.array(all_parameter_1)
         section.parameter_2 = np.array(all_parameter_2)
-        section.m_def.a_h5web.title = 'Potential Energy Surface Fit'
 
-        section = archive.data.m_setdefault('energy_std/0')  # style 2
+        section = archive.data.m_setdefault('energy_std')
         section.signal = np.sqrt(var_all_slices)
         section.parameter_1 = np.array(all_parameter_1)
         section.parameter_2 = np.array(all_parameter_2)
-        section.m_def.a_h5web.title = 'PES Error Estimate'
