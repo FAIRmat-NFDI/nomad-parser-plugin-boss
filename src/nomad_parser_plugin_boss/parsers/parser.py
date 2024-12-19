@@ -124,22 +124,15 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
         def compute_parameters(rank: int):
             return np.linspace(bounds[rank][0], bounds[rank][1], num=no_grid_points)
 
-        # systematically produce slices over the whole dimension space
-        all_parameter_1, all_parameter_2 = map(
-            list,
-            map(
-                lambda f, x: map(f, x),
-                (compute_parameters, compute_parameters),
-                zip(*generate_slices()),
-            ),
-        )
+        # Set up the archive
+        archive.data = PotentialEnergySurfaceFit()
+        archive.data.m_annotations['h5web'] = H5WebAnnotation(paths=[])
 
-        mu_all_slices, var_all_slices = [], []
-        for iteration in range(iter_no):
-            mu_all_slices.append([])
-            var_all_slices.append([])
-
-            for main_rank, upper_rank in generate_slices():
+        # Generate slices
+        for parameter_counter, rank in enumerate(generate_slices()):
+            main_rank, upper_rank = rank
+            mu_all_slices, var_all_slices = [], []
+            for iteration in range(iter_no):
                 pp = PPMain(
                     res,
                     pp_models=True,
@@ -149,23 +142,19 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
                 X = build_query_points(
                     pp.settings, res.select('x_glmin', iter_no)
                 )  # ? change to local minima
+
                 mu, var = res.reconstruct_model(iteration + 1).predict(X)
-                mu_all_slices[iteration].append(
+                mu_all_slices.append(
                     mu.reshape(no_grid_points, no_grid_points)
                 )
-                var_all_slices[iteration].append(
+                var_all_slices.append(
                     var.reshape(no_grid_points, no_grid_points)
                 )
 
-        # Write to archive
-        archive.data = PotentialEnergySurfaceFit()
-
-        section = archive.data.m_setdefault('energy_values')
-        section.signal = np.array(mu_all_slices)
-        section.parameter_1 = np.array(all_parameter_1)
-        section.parameter_2 = np.array(all_parameter_2)
-
-        section = archive.data.m_setdefault('energy_std')
-        section.signal = np.sqrt(var_all_slices)
-        section.parameter_1 = np.array(all_parameter_1)
-        section.parameter_2 = np.array(all_parameter_2)
+            # Save slices
+            slice_path = f'parameter_slices/{parameter_counter}'
+            section = archive.data.m_setdefault(slice_path)
+            archive.data.m_annotations['h5web'].paths.append(slice_path)
+            section.fitted_values = np.array(mu_all_slices)
+            section.parameter_1_values = np.array([[compute_parameters(main_rank)]])
+            section.parameter_2_values = np.array([[compute_parameters(upper_rank)]])

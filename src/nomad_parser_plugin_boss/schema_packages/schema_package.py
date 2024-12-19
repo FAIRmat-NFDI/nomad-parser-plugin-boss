@@ -12,19 +12,32 @@ from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
 m_package = SchemaPackage()
 
 
-class FittedValue(Schema):
+class ParameterSpaceSlice(Schema):
+    # ! TODO use `PhysicalProperty`
     m_def = Section(
         a_h5web=H5WebAnnotation(
-            signal='signal',
-            axes=['parameter_2', 'parameter_1'],
+            signal='fitted_values',
+            axes=['parameter_2_values', 'parameter_1_values'],
         )
     )
 
-    signal = Quantity(
-        type=HDF5Dataset,
-        unit='eV',  # ?
-        shape=[],
-    )  # ! TODO use `PhysicalProperty`
+    fitted_values = Quantity(
+        type=HDF5Dataset, unit='eV', a_h5web=H5WebAnnotation(long_name='PES')
+    )  # ! TODO: add errors # ? units
+
+    parameter_1_values = Quantity(
+        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='')
+    )
+
+    parameter_2_values = Quantity(
+        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='')
+    )
+
+
+class PotentialEnergySurfaceFit(Schema):
+    m_def = Section(
+        a_h5web=H5WebAnnotation(title='Potential Energy Surface Fit'),
+    )
 
     parameter_names = Quantity(
         type=str,
@@ -32,28 +45,7 @@ class FittedValue(Schema):
         a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
     )
 
-    parameter_1 = Quantity(
-        type=HDF5Dataset,
-        shape=[],
-    )  # ! TODO use `PhysicalProperty`
-
-    parameter_2 = Quantity(
-        type=HDF5Dataset,
-        shape=[],
-    )  # ! TODO use `PhysicalProperty`
-
-
-class PotentialEnergySurfaceFit(Schema):
-    m_def = Section(
-        a_h5web=H5WebAnnotation(
-            title='Potential Energy Surface Fit',
-            paths=['energy_values', 'energy_std'],
-        ),
-    )
-
-    energy_values = SubSection(sub_section=FittedValue.m_def)
-
-    energy_std = SubSection(sub_section=FittedValue.m_def)
+    parameter_slices = SubSection(sub_section=ParameterSpaceSlice.m_def, repeats=True)
 
 
 m_package.__init_metainfo__()
