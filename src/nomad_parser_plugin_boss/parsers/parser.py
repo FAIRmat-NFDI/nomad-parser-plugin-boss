@@ -3,9 +3,8 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from structlog.stdlib import (
-        BoundLogger,
-    )
+    from structlog.stdlib import BoundLogger
+    from nomad.datamodel.datamodel import EntryArchive
 
 import os
 import numpy as np
@@ -13,17 +12,18 @@ import numpy as np
 from boss.bo.results import BOResults
 from boss.io.dump import build_query_points
 from boss.pp.pp_main import PPMain
-from nomad.config import config
-from nomad.datamodel.datamodel import EntryArchive
+
 from nomad.datamodel.metainfo.annotations import H5WebAnnotation
 from nomad.parsing.file_parser.text_parser import Quantity as TextQuantity
 from nomad.parsing.file_parser.text_parser import TextParser
 from nomad.parsing.parser import MatchingParser
 
 from nomad_parser_plugin_boss.schema_packages.schema_package import (
+    generate_slices,
     PotentialEnergySurfaceFit,
 )
 
+from nomad.config import config
 configuration = config.get_plugin_entry_point(
     'nomad_parser_plugin_boss.parsers:parser_entry_point'
 )
@@ -91,9 +91,9 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
     def parse(
         self,
         mainfile: str,
-        archive: EntryArchive,
+        archive: 'EntryArchive',
         logger: 'BoundLogger',
-        child_archives: dict[str, EntryArchive] = None,
+        child_archives: dict[str, 'EntryArchive'] = None,
     ) -> None:
         logger.info('BossPostProcessingParser.parse', parameter=configuration.parameter)
 
@@ -109,13 +109,6 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
             pp_model_slice=[1, 2, no_grid_points],
         )
         bounds = pp.settings.get('bounds', [])
-        ranks = len(bounds)
-
-        @staticmethod
-        def generate_slices():
-            for main_rank in range(ranks):
-                for upper_rank in range(main_rank + 1, ranks):
-                    yield main_rank, upper_rank
 
         @staticmethod
         def compute_parameters(rank: int):
@@ -125,7 +118,7 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
         archive.data = PotentialEnergySurfaceFit()
 
         # Generate slices
-        for parameter_counter, rank in enumerate(generate_slices()):
+        for parameter_counter, rank in enumerate(generate_slices(len(bounds))):
             main_rank, upper_rank = rank
             mu_all_slices, var_all_slices = [], []
             for iteration in range(iter_no):
@@ -140,20 +133,20 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
                 )  # ? change to local minima
 
                 mu, var = res.reconstruct_model(iteration + 1).predict(X)
-                mu_all_slices.append(
-                    mu.reshape(no_grid_points, no_grid_points)
-                )
-                var_all_slices.append(
-                    var.reshape(no_grid_points, no_grid_points)
-                )
+                mu_all_slices.append(mu.reshape(no_grid_points, no_grid_points))
+                var_all_slices.append(var.reshape(no_grid_points, no_grid_points))
 
             # Save slices
             slice_path = f'parameter_slices/{parameter_counter}'
             section = archive.data.m_setdefault(slice_path)
             if parameter_counter == 0:
-                archive.data.parameter_slices[0].m_annotations['h5web'] = H5WebAnnotation(auxiliary_signals=[])
+                archive.data.parameter_slices[0].m_annotations['h5web'] = (
+                    H5WebAnnotation(auxiliary_signals=[])
+                )
             else:
-                archive.data.parameter_slices[0].m_annotations['h5web'].auxiliary_signals.append('../' + slice_path)
+                archive.data.parameter_slices[0].m_annotations[
+                    'h5web'
+                ].auxiliary_signals.append('../' + slice_path)
 
             section.fitted_values = np.array(mu_all_slices)
             section.fitted_stddevs = np.sqrt(var_all_slices)
