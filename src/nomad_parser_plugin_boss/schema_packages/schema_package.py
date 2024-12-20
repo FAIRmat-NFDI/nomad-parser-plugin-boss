@@ -17,7 +17,7 @@ class ParameterSpaceSlice(Schema):
     m_def = Section(
         a_h5web=H5WebAnnotation(
             signal='fitted_values',
-            axes=['parameter_2_values', 'parameter_1_values'],
+            axes=['blank', 'parameter_2_values', 'parameter_1_values'],
         )
     )
 
@@ -32,6 +32,13 @@ class ParameterSpaceSlice(Schema):
     parameter_2_values = Quantity(
         type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='')
     )
+
+    blank = Quantity(
+        type=HDF5Dataset, a_h5web=H5WebAnnotation()
+    )
+
+    def normalize(self, archive, logger):
+        self.blank = np.array([])
 
 
 class PotentialEnergySurfaceFit(Schema):
