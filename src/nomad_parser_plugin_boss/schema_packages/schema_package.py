@@ -30,7 +30,7 @@ class ParameterSpaceSlice(Schema):
     m_def = Section(
         a_h5web=H5WebAnnotation(
             signal='./fitted_values',
-            axes=['blank', 'parameter_2_values', 'parameter_1_values'],
+            axes=['parameter_1_values', 'parameter_2_values'],
         )
     )
 
@@ -43,17 +43,12 @@ class ParameterSpaceSlice(Schema):
     fitted_stddevs = Quantity(type=HDF5Dataset, unit='eV')
 
     parameter_1_values = Quantity(
-        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='')
+        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='', indices=1)
     )
 
     parameter_2_values = Quantity(
-        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='')
+        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='', indices=2)
     )
-
-    blank = Quantity(type=HDF5Dataset, a_h5web=H5WebAnnotation())
-
-    def normalize(self, archive, logger):
-        self.blank = np.array([])
 
 
 class PotentialEnergySurfaceFit(Schema):
@@ -71,16 +66,25 @@ class PotentialEnergySurfaceFit(Schema):
 
     parameter_slices = SubSection(sub_section=ParameterSpaceSlice.m_def, repeats=True)
 
-
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
         if isinstance(self.parameter_names, list):
             if len(self.parameter_names) == (n_slices := len(self.parameter_slices)):
-                for slice_indices, parameter_slice in zip(generate_slices(n_slices), self.parameter_slices):
+                for slice_indices, parameter_slice in zip(
+                    generate_slices(n_slices), self.parameter_slices
+                ):
                     main_rank, upper_rank = slice_indices
-                    parameter_slice.parameter_1_values.m_annotations['h5web'].long_name = self.parameter_names[main_rank]
-                    parameter_slice.parameter_2_values.m_annotations['h5web'].long_name = self.parameter_names[upper_rank]
+                    parameter_slice.parameter_1_values.m_annotations[
+                        'h5web'
+                    ].long_name = self.parameter_names[main_rank]
+                    parameter_slice.parameter_2_values.m_annotations[
+                        'h5web'
+                    ].long_name = self.parameter_names[upper_rank]
             else:
-                logger.warning('Length mismatch between parameter names and slices. Not updating annotations.', n_names=len(self.parameter_names), n_slices=n_slices)
+                logger.warning(
+                    'Length mismatch between parameter names and slices. Not updating annotations.',
+                    n_names=len(self.parameter_names),
+                    n_slices=n_slices,
+                )
 
 
 m_package.__init_metainfo__()
