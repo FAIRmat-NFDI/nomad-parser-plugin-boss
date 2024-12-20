@@ -16,7 +16,7 @@ class ParameterSpaceSlice(Schema):
     # ! TODO use `PhysicalProperty`
     m_def = Section(
         a_h5web=H5WebAnnotation(
-            signal='fitted_values',
+            signal='./fitted_values',
             axes=['blank', 'parameter_2_values', 'parameter_1_values'],
         )
     )
