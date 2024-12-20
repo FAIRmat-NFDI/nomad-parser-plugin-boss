@@ -156,5 +156,6 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
                 archive.data.parameter_slices[0].m_annotations['h5web'].auxiliary_signals.append('../' + slice_path)
 
             section.fitted_values = np.array(mu_all_slices)
+            section.fitted_stddevs = np.sqrt(var_all_slices)
             section.parameter_1_values = np.array(compute_parameters(main_rank))
             section.parameter_2_values = np.array(compute_parameters(upper_rank))

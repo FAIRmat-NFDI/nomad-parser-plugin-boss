@@ -22,8 +22,12 @@ class ParameterSpaceSlice(Schema):
     )
 
     fitted_values = Quantity(
-        type=HDF5Dataset, unit='eV', a_h5web=H5WebAnnotation(long_name='PES')
-    )  # ! TODO: add errors # ? units
+        type=HDF5Dataset, unit='eV', a_h5web=H5WebAnnotation(long_name='PES', errors='fitted_stddevs')
+    )  # ? units
+
+    fitted_stddevs = Quantity(
+        type=HDF5Dataset, unit='eV'
+    )
 
     parameter_1_values = Quantity(
         type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='')
