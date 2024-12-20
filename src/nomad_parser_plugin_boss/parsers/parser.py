@@ -101,10 +101,7 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
         res = BOResults.from_file(
             mainfile, os.path.join(os.path.dirname(mainfile), 'boss.out')
         )
-        iter_no, no_grid_points = (
-            res.settings.get('iterpts', 1),
-            50,
-        )  # ! make more robust, 250
+        iter_no, no_grid_points = (res.settings.get('iterpts', 1), 50)  # ! 250
         pp = PPMain(
             res,
             pp_models=True,
@@ -126,7 +123,6 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
 
         # Set up the archive
         archive.data = PotentialEnergySurfaceFit()
-        archive.data.m_annotations['h5web'] = H5WebAnnotation(paths=[])
 
         # Generate slices
         for parameter_counter, rank in enumerate(generate_slices()):
@@ -154,7 +150,11 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
             # Save slices
             slice_path = f'parameter_slices/{parameter_counter}'
             section = archive.data.m_setdefault(slice_path)
-            archive.data.m_annotations['h5web'].paths.append(slice_path)
+            if iteration == 0:
+                archive.data.parameter_slices[0].m_annotations['h5web'] = H5WebAnnotation(auxiliary_signals=[])
+            else:
+                archive.data.parameter_slices[0].m_annotations['h5web'].auxiliary_signals.append('../' + slice_path)
+
             section.fitted_values = np.array(mu_all_slices)
             section.parameter_1_values = np.array([[compute_parameters(main_rank)]])
             section.parameter_2_values = np.array([[compute_parameters(upper_rank)]])

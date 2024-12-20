@@ -36,7 +36,7 @@ class ParameterSpaceSlice(Schema):
 
 class PotentialEnergySurfaceFit(Schema):
     m_def = Section(
-        a_h5web=H5WebAnnotation(title='Potential Energy Surface Fit'),
+        a_h5web=H5WebAnnotation(title='Potential Energy Surface Fit', paths=['parameter_slices/0']),
     )
 
     parameter_names = Quantity(
