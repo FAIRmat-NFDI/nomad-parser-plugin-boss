@@ -150,7 +150,7 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
             # Save slices
             slice_path = f'parameter_slices/{parameter_counter}'
             section = archive.data.m_setdefault(slice_path)
-            if iteration == 0:
+            if parameter_counter == 0:
                 archive.data.parameter_slices[0].m_annotations['h5web'] = H5WebAnnotation(auxiliary_signals=[])
             else:
                 archive.data.parameter_slices[0].m_annotations['h5web'].auxiliary_signals.append('../' + slice_path)
