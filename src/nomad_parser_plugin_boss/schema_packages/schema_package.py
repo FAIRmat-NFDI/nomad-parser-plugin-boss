@@ -37,7 +37,10 @@ class ParameterSpaceSlice(Schema):
     fit = Quantity(
         type=HDF5Dataset,
         unit='eV',
-        a_h5web=H5WebAnnotation(long_name='Potential Energy Surface Fit', errors='fitting_errors',),
+        a_h5web=H5WebAnnotation(
+            long_name='Potential Energy Surface Fit',
+            errors='fitting_errors',
+        ),
     )  # ? units
 
     fitting_errors = Quantity(type=HDF5Dataset, unit='eV')
@@ -53,9 +56,7 @@ class ParameterSpaceSlice(Schema):
 
 class PotentialEnergySurfaceFit(Schema):
     m_def = Section(
-        a_h5web=H5WebAnnotation(
-            paths=['parameter_slices/0']
-        ),
+        a_h5web=H5WebAnnotation(paths=['parameter_slices/0']),
     )
 
     parameter_names = Quantity(

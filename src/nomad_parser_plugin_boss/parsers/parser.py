@@ -24,6 +24,7 @@ from nomad_parser_plugin_boss.schema_packages.schema_package import (
 )
 
 from nomad.config import config
+
 configuration = config.get_plugin_entry_point(
     'nomad_parser_plugin_boss.parsers:parser_entry_point'
 )
