@@ -29,32 +29,32 @@ class ParameterSpaceSlice(Schema):
     # ! TODO use `PhysicalProperty`
     m_def = Section(
         a_h5web=H5WebAnnotation(
-            signal='./fitted_values',
-            axes=['parameter_1_values', 'parameter_2_values'],
+            signal='fit',
+            axes=['parameters_x', 'parameters_y'],
         )
     )
 
-    fitted_values = Quantity(
+    fit = Quantity(
         type=HDF5Dataset,
         unit='eV',
-        a_h5web=H5WebAnnotation(long_name='PES', errors='fitted_stddevs'),
+        a_h5web=H5WebAnnotation(long_name='Potential Energy Surface Fit', errors='fitting_errors',),
     )  # ? units
 
-    fitted_stddevs = Quantity(type=HDF5Dataset, unit='eV')
+    fitting_errors = Quantity(type=HDF5Dataset, unit='eV')
 
-    parameter_1_values = Quantity(
-        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='', indices=1)
+    parameters_x = Quantity(
+        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='a', indices=1)
     )
 
-    parameter_2_values = Quantity(
-        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='', indices=2)
+    parameters_y = Quantity(
+        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='b', indices=2)
     )
 
 
 class PotentialEnergySurfaceFit(Schema):
     m_def = Section(
         a_h5web=H5WebAnnotation(
-            title='Potential Energy Surface Fit', paths=['parameter_slices/0']
+            paths=['parameter_slices/0']
         ),
     )
 
@@ -73,10 +73,10 @@ class PotentialEnergySurfaceFit(Schema):
                     generate_slices(n_slices), self.parameter_slices
                 ):
                     main_rank, upper_rank = slice_indices
-                    parameter_slice.parameter_1_values.m_annotations[
+                    parameter_slice.parameters_x.m_annotations[
                         'h5web'
                     ].long_name = self.parameter_names[main_rank]
-                    parameter_slice.parameter_2_values.m_annotations[
+                    parameter_slice.parameters_y.m_annotations[
                         'h5web'
                     ].long_name = self.parameter_names[upper_rank]
             else:

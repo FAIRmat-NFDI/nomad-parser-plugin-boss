@@ -139,13 +139,8 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
             # Save slices
             slice_path = f'parameter_slices/{parameter_counter}'
             section = archive.data.m_setdefault(slice_path)
-            main_data = archive.data.parameter_slices[0].m_annotations
-            if parameter_counter == 0:
-                main_data['h5web'] = H5WebAnnotation(auxiliary_signals=[])
-            else:
-                main_data['h5web'].auxiliary_signals.append('/data/' + slice_path)
 
-            section.fitted_values = np.array(mu_all_slices)
-            section.fitted_stddevs = np.sqrt(var_all_slices)
-            section.parameter_1_values = np.array(compute_parameters(main_rank))
-            section.parameter_2_values = np.array(compute_parameters(upper_rank))
+            section.fit = np.array(mu_all_slices)
+            section.fitting_errors = np.sqrt(var_all_slices)
+            section.parameters_x = np.array(compute_parameters(main_rank))
+            section.parameters_y = np.array(compute_parameters(upper_rank))
