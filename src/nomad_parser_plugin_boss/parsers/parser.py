@@ -1,13 +1,12 @@
-from typing import (
-    TYPE_CHECKING,
-)
+from typing import TYPE_CHECKING, Union, Iterable, Optional
 
 if TYPE_CHECKING:
     from structlog.stdlib import BoundLogger
     from nomad.datamodel.datamodel import EntryArchive
 
-import os
+import json
 import numpy as np
+import os
 
 from boss.bo.results import BOResults
 from boss.io.dump import build_query_points
@@ -54,6 +53,8 @@ class BossSliceParser(TextParser):
 
 
 class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
+    creates_children = True
+
     def parse_datfile(
         self, datfile: str, child_archive: 'EntryArchive', logger: 'BoundLogger'
     ) -> list[float]:
@@ -89,6 +90,21 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
             energy_variance=reshaping(get_column('nu'), len(x_1), len(x_2)),
         )
 
+
+    def gen_mainfile(self, mainfile: str, logger: 'BoundLogger') -> Iterable[str]:
+
+    def create_archive(self, entry_dict: dict, context, file_name: str, logger: 'BoundLogger') -> Optional[str]:
+        if not context.raw_path_exists(file_name):
+            with context.raw_file(file_name, 'w') as outfile:
+                json.dump(entry_dict, outfile)
+            context.upload.process_updated_raw_file(file_name, allow_modify=True)
+            return file_name
+        else:
+            logger.error(
+                f'{file_name} archive file already exists.'
+                f'If you intend to reprocess the older archive file, remove the existing one and run reprocessing again.'
+            )
+
     def parse(
         self,
         mainfile: str,
@@ -97,11 +113,18 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
         child_archives: dict[str, 'EntryArchive'] = None,
     ) -> None:
         logger.info('BossPostProcessingParser.parse', parameter=configuration.parameter)
+        root = archive
+
+        new_mainfile = self.create_archive(
+            root.m_to_dict(), root.m_context, 'archive.json', logger
+        )
+        if new_mainfile is not None:
+            archive.metadata.mainfile = new_mainfile
 
         # https://cest-group.gitlab.io/boss/_modules/boss/pp/pp_main.html#PPMain.rstfile
         res = BOResults.from_file(
             mainfile, os.path.join(os.path.dirname(mainfile), 'boss.out')
-        )
+        )  # TODO use NOMAD functionalities
         iter_no, no_grid_points = (res.settings.get('iterpts', 1), 50)  # ! 250
         pp = PPMain(
             res,
@@ -116,10 +139,15 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
             return np.linspace(bounds[rank][0], bounds[rank][1], num=no_grid_points)
 
         # Set up the archive
-        archive.data = PotentialEnergySurfaceFit()
+        root.data = PotentialEnergySurfaceFit(
+            n_parameters=len(bounds),
+            parameter_names=[],
+        )
 
         # Generate slices
-        for parameter_counter, rank in enumerate(generate_slices(len(bounds))):
+        for parameter_counter, rank in enumerate(
+            generate_slices(root.data.n_parameters)
+        ):
             main_rank, upper_rank = rank
             mu_all_slices, var_all_slices = [], []
             for iteration in range(iter_no):
@@ -139,7 +167,7 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
 
             # Save slices
             slice_path = f'parameter_slices/{parameter_counter}'
-            section = archive.data.m_setdefault(slice_path)
+            section = root.data.m_setdefault(slice_path)
 
             section.fit = np.array(mu_all_slices)
             section.fitting_errors = np.sqrt(var_all_slices)

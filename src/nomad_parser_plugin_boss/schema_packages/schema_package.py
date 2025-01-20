@@ -10,8 +10,6 @@ from nomad.datamodel.data import Schema
 from nomad.datamodel.hdf5 import HDF5Dataset
 from nomad.datamodel.metainfo.annotations import (
     H5WebAnnotation,
-    ELNAnnotation,
-    ELNComponentEnum,
 )
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
 
@@ -59,19 +57,21 @@ class PotentialEnergySurfaceFit(Schema):
         a_h5web=H5WebAnnotation(paths=['parameter_slices/0']),
     )
 
+    n_parameters = Quantity(type=int)
+
     parameter_names = Quantity(
         type=str,
         shape=['*'],
-        a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
+        a_eln=dict(component='StringEditQuantity'),
     )
 
     parameter_slices = SubSection(sub_section=ParameterSpaceSlice.m_def, repeats=True)
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
         if isinstance(self.parameter_names, list):
-            if len(self.parameter_names) == (n_slices := len(self.parameter_slices)):
+            if len(self.parameter_names) == self.n_parameters:
                 for slice_indices, parameter_slice in zip(
-                    generate_slices(n_slices), self.parameter_slices
+                    generate_slices(self.n_parameters), self.parameter_slices
                 ):
                     main_rank, upper_rank = slice_indices
                     parameter_slice.parameters_x.m_annotations[
@@ -84,7 +84,7 @@ class PotentialEnergySurfaceFit(Schema):
                 logger.warning(
                     'Length mismatch between parameter names and slices. Not updating annotations.',
                     n_names=len(self.parameter_names),
-                    n_slices=n_slices,
+                    n_parameters=self.n_parameters,
                 )
 
 
