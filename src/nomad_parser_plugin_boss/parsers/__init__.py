@@ -14,6 +14,5 @@ class BossParserEntryPoint(ParserEntryPoint):
 parser_entry_point = BossParserEntryPoint(
     name='BossParser',
     description='New parser entry point configuration.',
-    mainfile_name_re='.*it\d+_npts\d+\.dat',
-    mainfile_contents_re='Model output \(x mu nu\)',
+    mainfile_name_re='.*\.rst',
 )

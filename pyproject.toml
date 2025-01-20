@@ -28,6 +28,7 @@ license = { file = "LICENSE" }
 dependencies = [
     "nomad-lab>=1.3.0",
     "python-magic-bin; sys_platform == 'win32'",
+    "aalto-boss>=1.12.0",
 ]
 
 [project.urls]
