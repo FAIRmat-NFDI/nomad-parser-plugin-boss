@@ -1,29 +1,24 @@
-from typing import (
-    TYPE_CHECKING,
-)
-
-if TYPE_CHECKING:
-    from structlog.stdlib import BoundLogger
-    from nomad.datamodel.datamodel import EntryArchive
-
 import os
-import numpy as np
+from typing import TYPE_CHECKING
 
+import numpy as np
 from boss.bo.results import BOResults
 from boss.io.dump import build_query_points
 from boss.pp.pp_main import PPMain
-
-from nomad.datamodel.metainfo.annotations import H5WebAnnotation
+from nomad.config import config
 from nomad.parsing.file_parser.text_parser import Quantity as TextQuantity
 from nomad.parsing.file_parser.text_parser import TextParser
 from nomad.parsing.parser import MatchingParser
 
 from nomad_parser_plugin_boss.schema_packages.schema_package import (
-    generate_slices,
     PotentialEnergySurfaceFit,
+    generate_slices,
 )
 
-from nomad.config import config
+if TYPE_CHECKING:
+    from nomad.datamodel.datamodel import EntryArchive
+    from structlog.stdlib import BoundLogger
+
 configuration = config.get_plugin_entry_point(
     'nomad_parser_plugin_boss.parsers:parser_entry_point'
 )

@@ -1,19 +1,15 @@
-from typing import TYPE_CHECKING, Generator
+from collections.abc import Generator
+from typing import TYPE_CHECKING
+
+from nomad.datamodel.data import Schema
+from nomad.datamodel.hdf5 import HDF5Dataset
+from nomad.datamodel.metainfo.annotations import H5WebAnnotation
+from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
 
 if TYPE_CHECKING:
     from nomad.datamodel.datamodel import EntryArchive
     from structlog.stdlib import BoundLogger
 
-import numpy as np
-
-from nomad.datamodel.data import Schema
-from nomad.datamodel.hdf5 import HDF5Dataset
-from nomad.datamodel.metainfo.annotations import (
-    H5WebAnnotation,
-    ELNAnnotation,
-    ELNComponentEnum,
-)
-from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
 
 m_package = SchemaPackage()
 
@@ -45,26 +41,20 @@ class ParameterSpaceSlice(Schema):
 
     iteration = Quantity(
         type=HDF5Dataset,
-        description='''
+        description="""
         Iteration number of the data aggregation process in the fit.
         The starting data is labeled as 0
-        ''',
+        """,
     )
 
-    parameters_x = Quantity(
-        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='a')
-    )
+    parameters_x = Quantity(type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='a'))
 
-    parameters_y = Quantity(
-        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='b')
-    )
+    parameters_y = Quantity(type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='b'))
 
 
 class PotentialEnergySurfaceFit(Schema):
     m_def = Section(
-        a_h5web=H5WebAnnotation(
-            paths=['parameter_slices/0']
-        ),
+        a_h5web=H5WebAnnotation(paths=['parameter_slices/0']),
     )
 
     parameter_names = Quantity(
@@ -90,7 +80,10 @@ class PotentialEnergySurfaceFit(Schema):
                     ].long_name = self.parameter_names[upper_rank]
             else:
                 logger.warning(
-                    'Length mismatch between parameter names and slices. Not updating annotations.',
+                    (
+                        'Length mismatch between parameter names and slices. ',
+                        'Not updating annotations.'
+                    ),
                     n_names=len(self.parameter_names),
                     n_slices=n_slices,
                 )
