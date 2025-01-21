@@ -118,21 +118,22 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
         archive.data = PotentialEnergySurfaceFit()
 
         # Generate slices
+        iteration_procedure = np.arange(iter_no, 0, -1)
         for parameter_counter, rank in enumerate(generate_slices(len(bounds))):
             main_rank, upper_rank = rank
             mu_all_slices, var_all_slices = [], []
-            for iteration in range(iter_no):
+            for iteration in iteration_procedure:
                 pp = PPMain(
                     res,
                     pp_models=True,
-                    pp_iters=[iteration + 1],
+                    pp_iters=[iteration],
                     pp_model_slice=[main_rank + 1, upper_rank + 1, no_grid_points],
                 )
                 X = build_query_points(
                     pp.settings, res.select('x_glmin', iter_no)
                 )  # ? change to local minima
 
-                mu, var = res.reconstruct_model(iteration + 1).predict(X)
+                mu, var = res.reconstruct_model(iteration).predict(X)
                 mu_all_slices.append(mu.reshape(no_grid_points, no_grid_points))
                 var_all_slices.append(var.reshape(no_grid_points, no_grid_points))
 
@@ -141,6 +142,7 @@ class BossPostProcessingParser(MatchingParser):  # ! TODO: redo
             section = archive.data.m_setdefault(slice_path)
 
             section.fit = np.array(mu_all_slices)
-            section.fitting_errors = np.sqrt(var_all_slices)
+            section.uncertainty = np.sqrt(var_all_slices)
+            section.iteration = iteration_procedure
             section.parameters_x = np.array(compute_parameters(main_rank))
             section.parameters_y = np.array(compute_parameters(upper_rank))
