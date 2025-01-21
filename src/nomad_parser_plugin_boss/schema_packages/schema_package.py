@@ -70,7 +70,7 @@ class PotentialEnergySurfaceFit(Schema):
     parameter_names = Quantity(
         type=str,
         shape=['*'],
-        a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
+        # a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
     )
 
     parameter_slices = SubSection(sub_section=ParameterSpaceSlice.m_def, repeats=True)
