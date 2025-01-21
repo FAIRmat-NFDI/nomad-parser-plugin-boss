@@ -30,24 +30,33 @@ class ParameterSpaceSlice(Schema):
     m_def = Section(
         a_h5web=H5WebAnnotation(
             signal='fit',
-            axes=['parameters_x', 'parameters_y'],
+            errors='uncertainty',  # only relevant for 1-D visualizations
+            axes=['iteration', 'parameters_x', 'parameters_y'],
         )
     )
 
     fit = Quantity(
         type=HDF5Dataset,
         unit='eV',
-        a_h5web=H5WebAnnotation(long_name='Potential Energy Surface Fit', errors='fitting_errors',),
+        a_h5web=H5WebAnnotation(long_name='Potential Energy Surface Fit'),
     )  # ? units
 
-    fitting_errors = Quantity(type=HDF5Dataset, unit='eV')
+    uncertainty = Quantity(type=HDF5Dataset, unit='eV')
+
+    iteration = Quantity(
+        type=HDF5Dataset,
+        description='''
+        Iteration number of the data aggregation process in the fit.
+        The starting data is labeled as 0
+        ''',
+    )
 
     parameters_x = Quantity(
-        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='a', indices=1)
+        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='a')
     )
 
     parameters_y = Quantity(
-        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='b', indices=2)
+        type=HDF5Dataset, a_h5web=H5WebAnnotation(long_name='b')
     )
 
 
