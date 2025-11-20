@@ -70,10 +70,6 @@ class ParameterSpaceSlice(Schema):
 
 
 class PotentialEnergySurfaceFit(Schema):
-    m_def = Section(
-        a_h5web=H5WebAnnotation(paths=['parameter_slices/0']),
-    )
-
     data_file = Quantity(
         type=str,
         description='Path to the BOSS .rst data file',
