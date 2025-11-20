@@ -1,18 +1,16 @@
 from nomad.config.models.plugins import ParserEntryPoint
-from pydantic import Field
 
 
 class BossParserEntryPoint(ParserEntryPoint):
-    parameter: int = Field(0, description='Custom configuration parameter')
-
     def load(self):
-        from nomad_parser_plugin_boss.parsers.parser import BossPostProcessingParser
+        from nomad_parser_plugin_boss.parsers.parser import BossParser
 
-        return BossPostProcessingParser(**self.dict())
+        return BossParser(**self.dict())
 
 
 parser_entry_point = BossParserEntryPoint(
     name='BossParser',
-    description='New parser entry point configuration.',
-    mainfile_name_re='.*\.rst',
+    description='Parser for BOSS Bayesian Optimization result files (.rst format).',
+    mainfile_name_re=r'^.*\.rst$',
+    mainfile_mime_re='text/.*|application/octet-stream',
 )

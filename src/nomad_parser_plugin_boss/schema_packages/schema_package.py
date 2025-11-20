@@ -1,9 +1,15 @@
 from collections.abc import Generator
 from typing import TYPE_CHECKING
 
-from nomad.datamodel.data import Schema
+from nomad.datamodel.data import EntryData, Schema
 from nomad.datamodel.hdf5 import HDF5Dataset
-from nomad.datamodel.metainfo.annotations import H5WebAnnotation
+from nomad.datamodel.metainfo.annotations import (
+    ELNAnnotation,
+    ELNComponentEnum,
+    H5WebAnnotation,
+    SectionProperties,
+)
+from nomad.datamodel.metainfo.plot import PlotSection
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
 
 if TYPE_CHECKING:
@@ -57,10 +63,18 @@ class PotentialEnergySurfaceFit(Schema):
         a_h5web=H5WebAnnotation(paths=['parameter_slices/0']),
     )
 
+    data_file = Quantity(
+        type=str,
+        description='Path to the BOSS .rst data file',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.FileEditQuantity,
+        ),
+    )
+
     parameter_names = Quantity(
         type=str,
         shape=['*'],
-        # a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
+        a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
     )
 
     parameter_slices = SubSection(sub_section=ParameterSpaceSlice.m_def, repeats=True)
@@ -87,6 +101,56 @@ class PotentialEnergySurfaceFit(Schema):
                     n_names=len(self.parameter_names),
                     n_slices=n_slices,
                 )
+
+
+class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
+    """
+    ELN entry for BOSS Bayesian Optimization analysis results.
+    This section combines the data model with ELN features and plotting capabilities.
+    """
+
+    m_def = Section(
+        label='BOSS Analysis',
+        a_eln=ELNAnnotation(
+            lane_width='800px',
+            properties=SectionProperties(
+                order=[
+                    'name',
+                    'data_file',
+                    'parameter_names',
+                    'description',
+                ]
+            ),
+        ),
+        a_h5web=H5WebAnnotation(paths=['parameter_slices/0']),
+    )
+
+    def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
+        """
+        Normalization method for ELN entry.
+        """
+        super().normalize(archive, logger)
+
+        # Auto-set entry name from file if not set
+        if self.data_file and not archive.metadata.entry_name:
+            import os
+
+            file_base = os.path.basename(self.data_file)
+            archive.metadata.entry_name = f'BOSS Analysis: {file_base}'
+
+
+class RawFileBOSSData(EntryData):
+    """
+    Entry section for a BOSS raw data file.
+    Contains only a reference to the main ELN measurement entry.
+    """
+
+    measurement = Quantity(
+        type=ELNBOSSAnalysis,
+        a_eln=ELNAnnotation(
+            component='ReferenceEditQuantity',
+        ),
+    )
 
 
 m_package.__init_metainfo__()
