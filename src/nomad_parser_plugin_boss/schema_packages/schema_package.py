@@ -3,13 +3,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from nomad.datamodel.data import EntryData, Schema
+from nomad.datamodel.hdf5 import HDF5Reference
 from nomad.datamodel.metainfo.annotations import (
     ELNAnnotation,
     ELNComponentEnum,
     H5WebAnnotation,
     SectionProperties,
 )
-from nomad.datamodel.metainfo.basesections import HDF5Reference
 from nomad.datamodel.metainfo.plot import PlotSection
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
 from nomad_measurements.utils import Dataset, HDF5Handler
