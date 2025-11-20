@@ -270,6 +270,17 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                         ),
                     )
 
+                    # Add NeXus metadata for H5Web visualization
+                    handler.add_attribute(
+                        path=f'/slice_{parameter_counter}',
+                        params=dict(
+                            axes=['iteration', 'parameters_x', 'parameters_y'],
+                            signal='fit',
+                            auxiliary=['uncertainty'],
+                            NX_class='NXdata',
+                        ),
+                    )
+
                 # Write HDF5 file and populate HDF5Reference quantities
                 handler.write_file()
 
