@@ -1,9 +1,7 @@
 name: Deploy MkDocs Site
 
 on:
-  push:
-    branches:
-      - main # Triggers deployment on push to the main branch
+  workflow_dispatch: # Manual trigger only - deploy docs manually from Actions tab
  
 permissions:
   contents: write
