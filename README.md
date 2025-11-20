@@ -4,6 +4,15 @@ Plugin for parsing and displaying BOSS PES arftifacts
 
 This `nomad` plugin was generated with `Cookiecutter` along with `@nomad`'s [`cookiecutter-nomad-plugin`](https://github.com/FAIRmat-NFDI/cookiecutter-nomad-plugin) template.
 
+## ⚠️ Important Dependency Note
+
+**Temporary Workaround**: This plugin requires `aalto-boss>=1.12.0`, which depends on `GPy>=1.13.1`. GPy has a hard constraint of `scipy<=1.12.0`, which conflicts with newer versions of `pymatgen` (>=2025.10.7) that require `scipy>=1.13.0`.
+
+**Current solution**: We've constrained `pymatgen<2025.10.7` in `nomad-FAIR/pyproject.toml` to maintain compatibility. This constraint should be removed once GPy updates to support `scipy>=1.13.0`.
+
+**Tracking**:
+- GPy issue: https://github.com/SheffieldML/GPy/issues (scipy compatibility)
+- This workaround was added on 2025-11-20
 
 ## Development
 
