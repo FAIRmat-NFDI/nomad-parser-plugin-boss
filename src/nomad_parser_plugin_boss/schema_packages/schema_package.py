@@ -281,6 +281,16 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                 # Write HDF5 file and populate HDF5Reference quantities
                 handler.write_file()
 
+                # Debug: Check if HDF5Reference quantities were populated
+                logger.info('Checking HDF5Reference population after write_file()')
+                for i, slice_obj in enumerate(self.parameter_slices):
+                    logger.info(
+                        f'Slice {i} type and attributes',
+                        slice_type=type(slice_obj).__name__,
+                        has_fit=hasattr(slice_obj, 'fit') and slice_obj.fit is not None,
+                        fit_value=getattr(slice_obj, 'fit', None),
+                    )
+
                 # Initialize figures to trigger Overview tab visualization
                 # Even though we use H5Web (not Plotly), PlotSection may require this
                 self.figures = []
