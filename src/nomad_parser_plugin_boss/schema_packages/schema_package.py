@@ -226,12 +226,12 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                     slice_path = f'parameter_slices/{parameter_counter}'
                     self.m_setdefault(slice_path)
 
-                    # Add datasets to HDF5 handler with archive paths
+                    # Add datasets to HDF5 handler with archive paths (use dots, not slashes)
                     handler.add_dataset(
                         path=f'/slice_{parameter_counter}/fit',
                         dataset=Dataset(
                             data=np.array(mu_all_slices),
-                            archive_path=f'data.{slice_path}.fit',
+                            archive_path=f'data.parameter_slices.{parameter_counter}.fit',
                         ),
                     )
 
@@ -239,7 +239,7 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                         path=f'/slice_{parameter_counter}/uncertainty',
                         dataset=Dataset(
                             data=np.sqrt(np.array(var_all_slices)),
-                            archive_path=f'data.{slice_path}.uncertainty',
+                            archive_path=f'data.parameter_slices.{parameter_counter}.uncertainty',
                         ),
                     )
 
@@ -247,7 +247,7 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                         path=f'/slice_{parameter_counter}/iteration',
                         dataset=Dataset(
                             data=iteration_procedure,
-                            archive_path=f'data.{slice_path}.iteration',
+                            archive_path=f'data.parameter_slices.{parameter_counter}.iteration',
                         ),
                     )
 
@@ -255,7 +255,7 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                         path=f'/slice_{parameter_counter}/parameters_x',
                         dataset=Dataset(
                             data=np.array(compute_parameters(main_rank)),
-                            archive_path=f'data.{slice_path}.parameters_x',
+                            archive_path=f'data.parameter_slices.{parameter_counter}.parameters_x',
                         ),
                     )
 
@@ -263,7 +263,7 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                         path=f'/slice_{parameter_counter}/parameters_y',
                         dataset=Dataset(
                             data=np.array(compute_parameters(upper_rank)),
-                            archive_path=f'data.{slice_path}.parameters_y',
+                            archive_path=f'data.parameter_slices.{parameter_counter}.parameters_y',
                         ),
                     )
 
