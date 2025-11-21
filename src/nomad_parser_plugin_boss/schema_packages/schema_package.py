@@ -149,6 +149,15 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
         from boss.io.dump import build_query_points
         from boss.pp.pp_main import PPMain
 
+        logger.info(
+            'ELNBOSSAnalysis.normalize() called',
+            data_file=self.data_file,
+            has_parameter_slices=bool(self.parameter_slices),
+            n_parameter_slices=len(self.parameter_slices) if self.parameter_slices else 0,
+            has_auxiliary_file=bool(self.auxiliary_file),
+            archive_is_entry=(archive.data == self),
+        )
+
         super().normalize(archive, logger)
 
         # Auto-set entry name from file if not set
