@@ -157,8 +157,8 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
             archive.metadata.entry_name = f'BOSS Analysis: {file_base}'
 
         # Parse BOSS data if not already done
-        # Guard against double execution by checking both parameter_slices and auxiliary_file
-        if self.data_file and not self.parameter_slices and not self.auxiliary_file:
+        # Guard against double execution by checking if parameter_slices are populated
+        if self.data_file and not self.parameter_slices:
             logger.info('Parsing BOSS data in normalize()', data_file=self.data_file)
 
             try:
