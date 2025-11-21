@@ -93,10 +93,14 @@ class PotentialEnergySurfaceFit(Schema):
     parameter_slices = SubSection(sub_section=ParameterSpaceSlice.m_def, repeats=True)
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
-        if isinstance(self.parameter_names, list):
-            if len(self.parameter_names) == (n_slices := len(self.parameter_slices)):
+        if isinstance(self.parameter_names, list) and len(self.parameter_names) > 0:
+            n_params = len(self.parameter_names)
+            expected_slices = n_params * (n_params - 1) // 2  # C(n, 2) = n*(n-1)/2
+            n_slices = len(self.parameter_slices)
+
+            if n_slices == expected_slices:
                 for slice_indices, parameter_slice in zip(
-                    generate_slices(n_slices), self.parameter_slices
+                    generate_slices(n_params), self.parameter_slices
                 ):
                     main_rank, upper_rank = slice_indices
                     parameter_slice.parameters_x.m_annotations[
@@ -108,11 +112,12 @@ class PotentialEnergySurfaceFit(Schema):
             else:
                 logger.warning(
                     (
-                        'Length mismatch between parameter names and slices. ',
+                        'Number of slices does not match expected combinations. ',
                         'Not updating annotations.'
                     ),
-                    n_names=len(self.parameter_names),
+                    n_params=n_params,
                     n_slices=n_slices,
+                    expected_slices=expected_slices,
                 )
 
 
@@ -235,6 +240,10 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                     # Create the slice section explicitly
                     slice_obj = ParameterSpaceSlice()
                     self.parameter_slices.append(slice_obj)
+
+                    # Update H5Web axis labels for this slice
+                    slice_obj.parameters_x.m_annotations['h5web'].long_name = self.parameter_names[main_rank]
+                    slice_obj.parameters_y.m_annotations['h5web'].long_name = self.parameter_names[upper_rank]
 
                     # Add datasets to HDF5 handler with archive paths (use square brackets for array indices)
                     handler.add_dataset(
