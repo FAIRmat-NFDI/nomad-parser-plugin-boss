@@ -2,7 +2,7 @@ from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 import numpy as np
-from nomad.datamodel.data import EntryData, Schema
+from nomad.datamodel.data import ArchiveSection, EntryData, Schema
 from nomad.datamodel.hdf5 import HDF5Reference
 from nomad.datamodel.metainfo.annotations import (
     ELNAnnotation,
@@ -29,7 +29,7 @@ def generate_slices(ranks: int) -> Generator:
             yield main_rank, upper_rank
 
 
-class ParameterSpaceSlice(Schema):
+class ParameterSpaceSlice(ArchiveSection):
     # ! TODO use `PhysicalProperty`
     m_def = Section(
         a_h5web=H5WebAnnotation(
@@ -279,6 +279,10 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
 
                 # Write HDF5 file and populate HDF5Reference quantities
                 handler.write_file()
+
+                # Initialize figures to trigger Overview tab visualization
+                # Even though we use H5Web (not Plotly), PlotSection may require this
+                self.figures = []
 
                 logger.info(
                     'Successfully parsed BOSS data and created HDF5 file',
