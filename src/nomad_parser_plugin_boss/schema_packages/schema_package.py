@@ -157,7 +157,8 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
             archive.metadata.entry_name = f'BOSS Analysis: {file_base}'
 
         # Parse BOSS data if not already done
-        if self.data_file and not self.parameter_slices:
+        # Guard against double execution by checking both parameter_slices and auxiliary_file
+        if self.data_file and not self.parameter_slices and not self.auxiliary_file:
             logger.info('Parsing BOSS data in normalize()', data_file=self.data_file)
 
             try:
@@ -222,9 +223,9 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                         mu_all_slices.append(mu.reshape(no_grid_points, no_grid_points))
                         var_all_slices.append(var.reshape(no_grid_points, no_grid_points))
 
-                    # Create the slice section (this creates the subsection in archive)
-                    slice_path = f'parameter_slices/{parameter_counter}'
-                    self.m_setdefault(slice_path)
+                    # Create the slice section explicitly
+                    slice_obj = ParameterSpaceSlice()
+                    self.parameter_slices.append(slice_obj)
 
                     # Add datasets to HDF5 handler with archive paths (use square brackets for array indices)
                     handler.add_dataset(
@@ -280,16 +281,6 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
 
                 # Write HDF5 file and populate HDF5Reference quantities
                 handler.write_file()
-
-                # Debug: Check if HDF5Reference quantities were populated
-                logger.info('Checking HDF5Reference population after write_file()')
-                for i, slice_obj in enumerate(self.parameter_slices):
-                    logger.info(
-                        f'Slice {i} type and attributes',
-                        slice_type=type(slice_obj).__name__,
-                        has_fit=hasattr(slice_obj, 'fit') and slice_obj.fit is not None,
-                        fit_value=getattr(slice_obj, 'fit', None),
-                    )
 
                 # Initialize figures to trigger Overview tab visualization
                 # Even though we use H5Web (not Plotly), PlotSection may require this

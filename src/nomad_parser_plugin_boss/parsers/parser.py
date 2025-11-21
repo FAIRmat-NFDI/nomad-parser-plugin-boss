@@ -54,16 +54,11 @@ class BossParser(MatchingParser):
         # Create the ELN measurement entry with data_file
         entry = ELNBOSSAnalysis()
         entry.data_file = data_file
-
-        # IMPORTANT: Set archive context on entry before calling normalize()
         entry.m_context = archive.m_context
-
-        # Explicitly call normalize() to populate data BEFORE create_archive()
-        # This ensures the entry is fully populated when written to the archive file
-        entry.normalize(archive, logger)
 
         # Create the archive file for the ELN entry
         # This will be named like: "my_boss_file.archive.json"
+        # The normalize() method will be called by the archive processing system
         file_name = f'{"".join(data_file.split(".")[:-1])}.archive.json'
 
         # Set this archive as a RawFile entry with reference to the measurement
