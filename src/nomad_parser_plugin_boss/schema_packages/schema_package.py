@@ -32,9 +32,10 @@ def generate_slices(ranks: int) -> Generator:
 class ParameterSpaceSlice(ArchiveSection):
     # ! TODO use `PhysicalProperty`
     m_def = Section(
+        label='Parameter Space Slice',
         a_h5web=H5WebAnnotation(
             signal='fit',
-            errors='uncertainty',  # only relevant for 1-D visualizations
+            auxiliary_signals=['uncertainty'],
             axes=['iteration', 'parameters_x', 'parameters_y'],
         )
     )
