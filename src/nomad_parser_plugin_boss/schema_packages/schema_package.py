@@ -120,6 +120,46 @@ class PotentialEnergySurfaceFit(Schema):
 
     parameter_slices = SubSection(sub_section=ParameterSpaceSlice.m_def, repeats=True)
 
+    def load_parameter_names_file(
+        self, archive: 'EntryArchive', logger: 'BoundLogger'
+    ) -> list[str] | None:
+        """
+        Read parameter names from an optional `parameter_names.yml` (or `.yaml`)
+        file placed next to the data file. The file may contain either a plain
+        list of names or a mapping with a `parameter_names` key.
+        """
+        import os
+
+        import yaml
+
+        directory = os.path.dirname(self.data_file or '')
+        for filename in ('parameter_names.yml', 'parameter_names.yaml'):
+            path = os.path.join(directory, filename) if directory else filename
+            if not archive.m_context.raw_path_exists(path):
+                continue
+            try:
+                with archive.m_context.raw_file(path) as file_handle:
+                    content = yaml.safe_load(file_handle)
+            except Exception as e:
+                logger.warning(
+                    'Could not read parameter names file.', file=path, error=str(e)
+                )
+                return None
+            names = (
+                content.get('parameter_names') if isinstance(content, dict)
+                else content
+            )
+            if isinstance(names, list) and all(isinstance(n, str) for n in names):
+                logger.info('Loaded parameter names from file.', file=path)
+                return names
+            logger.warning(
+                'Invalid parameter names file: expected a list of names or a '
+                'mapping with a `parameter_names` key.',
+                file=path,
+            )
+            return None
+        return None
+
     def refresh_h5web_labels(
         self, archive: 'EntryArchive', logger: 'BoundLogger'
     ) -> None:
@@ -192,6 +232,13 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
             file_base = os.path.basename(self.data_file)
             archive.metadata.entry_name = f'BOSS Analysis: {file_base}'
 
+        # Names set beforehand via an optional parameter_names.yml raw file;
+        # never overrides names already set (e.g. edited in the ELN)
+        if self.data_file and not self.parameter_names:
+            self.parameter_names = (
+                self.load_parameter_names_file(archive, logger) or []
+            )
+
         needs_compute = self.data_file and (
             not self.parameter_slices
             or not self.auxiliary_file
@@ -237,6 +284,13 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
             return np.linspace(bounds[rank][0], bounds[rank][1], num=no_grid_points)
 
         # Default names; kept if the user already provided their own
+        if self.parameter_names and len(self.parameter_names) != len(bounds):
+            logger.warning(
+                'Number of parameter names does not match the number of '
+                'parameters. Using default names.',
+                n_names=len(self.parameter_names),
+                n_parameters=len(bounds),
+            )
         if not self.parameter_names or len(self.parameter_names) != len(bounds):
             self.parameter_names = [f'parameter_{i}' for i in range(len(bounds))]
 

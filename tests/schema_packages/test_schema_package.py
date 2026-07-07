@@ -129,6 +129,49 @@ def test_eln_edit_refreshes_labels(
         assert np.array_equal(h5file['/slice_0/fit'][()], fit_before)
 
 
+@pytest.mark.parametrize(
+    'names_yaml',
+    [
+        pytest.param('- phi\n- psi\n', id='plain-list'),
+        pytest.param('parameter_names:\n  - phi\n  - psi\n', id='mapping'),
+    ],
+)
+def test_parameter_names_file(
+    upload_dir, synthetic_pes, assert_h5web_group, names_yaml
+):
+    """A parameter_names.yml next to the data file sets the names beforehand."""
+    (upload_dir / 'parameter_names.yml').write_text(names_yaml)
+    mainfile = upload_dir / 'noname.archive.yaml'
+    mainfile.write_text(
+        'data:\n'
+        '  m_def: nomad_parser_plugin_boss.schema_packages.schema_package'
+        '.ELNBOSSAnalysis\n'
+        '  data_file: boss.rst\n'
+    )
+
+    archive = parse(str(mainfile))[0]
+    normalize_all(archive)
+
+    assert list(archive.data.parameter_names) == ['phi', 'psi']
+    with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
+        assert_h5web_group(
+            h5file,
+            '/slice_0',
+            title='phi vs psi',
+            long_names={'parameters_x': 'phi', 'parameters_y': 'psi'},
+        )
+
+
+def test_parameter_names_file_does_not_override_eln(upload_dir, synthetic_pes):
+    """Names already set (e.g. in the ELN or archive file) win over the file."""
+    (upload_dir / 'parameter_names.yml').write_text('- phi\n- psi\n')
+
+    archive = parse(str(upload_dir / 'test.archive.yaml'))[0]
+    normalize_all(archive)
+
+    assert list(archive.data.parameter_names) == ['x', 'y']
+
+
 def test_name_count_mismatch_warns(
     upload_dir, synthetic_pes, assert_h5web_group, caplog
 ):
