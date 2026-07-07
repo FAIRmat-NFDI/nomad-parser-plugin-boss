@@ -1,13 +1,20 @@
 import json
+from itertools import combinations
 
 import h5py
 import numpy as np
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from nomad.client import normalize_all, parse
 
 from nomad_parser_plugin_boss.schema_packages.schema_package import (
     ELNBOSSAnalysis,
     h5web_attribute_map,
+)
+
+parameter_names = st.lists(
+    st.text(min_size=1, max_size=12), min_size=2, max_size=8, unique=True
 )
 
 
@@ -31,6 +38,39 @@ def test_h5web_attribute_map():
     assert group_attrs['auxiliary_signals'] == ['uncertainty']
     assert attribute_map['/slice_0/fit']['units'] == 'eV'
     assert attribute_map['/slice_0/uncertainty']['units'] == 'eV'
+
+
+@given(names=parameter_names)
+def test_h5web_attribute_map_properties(names):
+    """
+    For any list of unique names: one group per i<j combination in
+    generate_slices order, axis long_names pair up exactly with that
+    combination, and every group is a complete, well-formed NXdata block.
+    """
+    attribute_map = h5web_attribute_map(names)
+
+    groups = [key for key in attribute_map if key.count('/') == 1]
+    n = len(names)
+    assert groups == [f'/slice_{i}' for i in range(n * (n - 1) // 2)]
+
+    axis_pairs = []
+    for group in groups:
+        x_name = attribute_map[f'{group}/parameters_x']['long_name']
+        y_name = attribute_map[f'{group}/parameters_y']['long_name']
+        axis_pairs.append((names.index(x_name), names.index(y_name)))
+
+        group_attrs = attribute_map[group]
+        assert group_attrs['NX_class'] == 'NXdata'
+        assert group_attrs['signal'] == 'fit'
+        assert group_attrs['axes'] == ['iteration', 'parameters_x', 'parameters_y']
+        assert group_attrs['auxiliary_signals'] == ['uncertainty']
+        assert group_attrs['title'] == f'{x_name} vs {y_name}'
+        for dataset in ('fit', 'uncertainty', 'iteration', 'parameters_x',
+                        'parameters_y'):
+            assert f'{group}/{dataset}' in attribute_map
+
+    # every i<j pair appears exactly once, in generate_slices order
+    assert axis_pairs == list(combinations(range(n), 2))
 
 
 def test_first_pass_labels(upload_dir, synthetic_pes, assert_h5web_group):

@@ -35,7 +35,7 @@ dependencies = [
 Repository = "https://github.com/FAIRmat-NFDI/nomad-parser-plugin-boss"
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest", "structlog"]
+dev = ["ruff", "pytest", "structlog", "hypothesis"]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
