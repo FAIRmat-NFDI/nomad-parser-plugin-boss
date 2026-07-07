@@ -24,23 +24,19 @@ BOSS Analysis entry. They can be set in three ways, in order of precedence:
 1. **Edited in the ELN**: change `parameter_names` on the BOSS Analysis entry
    and save. The plot labels and titles update immediately; the fits are not
    recomputed.
-2. **Set beforehand via a names file**: upload a file called
-   `parameter_names.yml` (or `.yaml`) in the same directory as the `.rst`
-   file. It is read whenever the entry has no names yet, e.g. on the first
-   processing. The file may contain a plain list
-
-    ```yaml
-    - phi
-    - psi
-    ```
-
-    or a mapping
+2. **Set beforehand via a config file**: upload a file called
+   `boss_analysis.yml` (or `.yaml`) in the same directory as the `.rst` file.
+   It is read whenever the entry has no names yet, e.g. on the first
+   processing. The names go under the `parameter_names` key:
 
     ```yaml
     parameter_names:
       - phi
       - psi
     ```
+
+    The file is deliberately structured as a mapping so that further analysis
+    options can be added later without changing the filename.
 
 3. **Defaults**: without either of the above, the names default to
    `parameter_0`, `parameter_1`, ...
@@ -53,7 +49,7 @@ initial parsing).
     Reprocessing the upload from scratch does **not** change previously set
     parameter names: the BOSS Analysis entry (`*.archive.json`) persists across
     reprocessing, and names stored there — whether edited in the ELN or loaded
-    from `parameter_names.yml` — take precedence. This is intended behavior: a
+    from `boss_analysis.yml` — take precedence. This is intended behavior: a
     reprocess never silently undoes user edits. To start over with fresh
     names, delete the generated `*.archive.json` (or the upload) and process
     again.

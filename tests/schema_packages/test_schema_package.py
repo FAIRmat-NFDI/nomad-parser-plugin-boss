@@ -130,17 +130,13 @@ def test_eln_edit_refreshes_labels(
 
 
 @pytest.mark.parametrize(
-    'names_yaml',
-    [
-        pytest.param('- phi\n- psi\n', id='plain-list'),
-        pytest.param('parameter_names:\n  - phi\n  - psi\n', id='mapping'),
-    ],
+    'config_filename', ['boss_analysis.yml', 'boss_analysis.yaml']
 )
-def test_parameter_names_file(
-    upload_dir, synthetic_pes, assert_h5web_group, names_yaml
+def test_analysis_config_sets_names(
+    upload_dir, synthetic_pes, assert_h5web_group, config_filename
 ):
-    """A parameter_names.yml next to the data file sets the names beforehand."""
-    (upload_dir / 'parameter_names.yml').write_text(names_yaml)
+    """A boss_analysis.yml next to the data file sets the names beforehand."""
+    (upload_dir / config_filename).write_text('parameter_names:\n  - phi\n  - psi\n')
     mainfile = upload_dir / 'noname.archive.yaml'
     mainfile.write_text(
         'data:\n'
@@ -162,9 +158,11 @@ def test_parameter_names_file(
         )
 
 
-def test_parameter_names_file_does_not_override_eln(upload_dir, synthetic_pes):
-    """Names already set (e.g. in the ELN or archive file) win over the file."""
-    (upload_dir / 'parameter_names.yml').write_text('- phi\n- psi\n')
+def test_analysis_config_does_not_override_eln(upload_dir, synthetic_pes):
+    """Names already set (e.g. in the ELN or archive file) win over the config."""
+    (upload_dir / 'boss_analysis.yml').write_text(
+        'parameter_names:\n  - phi\n  - psi\n'
+    )
 
     archive = parse(str(upload_dir / 'test.archive.yaml'))[0]
     normalize_all(archive)

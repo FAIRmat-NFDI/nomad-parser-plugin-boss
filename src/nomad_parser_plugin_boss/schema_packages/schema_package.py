@@ -120,20 +120,24 @@ class PotentialEnergySurfaceFit(Schema):
 
     parameter_slices = SubSection(sub_section=ParameterSpaceSlice.m_def, repeats=True)
 
-    def load_parameter_names_file(
+    # Optional per-upload configuration file, read from the data file's
+    # directory. Kept generic so future options can be added without renaming.
+    config_filenames = ('boss_analysis.yml', 'boss_analysis.yaml')
+
+    def load_analysis_config(
         self, archive: 'EntryArchive', logger: 'BoundLogger'
-    ) -> list[str] | None:
+    ) -> dict:
         """
-        Read parameter names from an optional `parameter_names.yml` (or `.yaml`)
-        file placed next to the data file. The file may contain either a plain
-        list of names or a mapping with a `parameter_names` key.
+        Read the optional `boss_analysis.yml` (or `.yaml`) configuration file
+        placed next to the data file. Returns an empty dict if the file is
+        missing or malformed. Currently supported keys: `parameter_names`.
         """
         import os
 
         import yaml
 
         directory = os.path.dirname(self.data_file or '')
-        for filename in ('parameter_names.yml', 'parameter_names.yaml'):
+        for filename in self.config_filenames:
             path = os.path.join(directory, filename) if directory else filename
             if not archive.m_context.raw_path_exists(path):
                 continue
@@ -142,23 +146,19 @@ class PotentialEnergySurfaceFit(Schema):
                     content = yaml.safe_load(file_handle)
             except Exception as e:
                 logger.warning(
-                    'Could not read parameter names file.', file=path, error=str(e)
+                    'Could not read analysis config file.', file=path, error=str(e)
                 )
-                return None
-            names = (
-                content.get('parameter_names') if isinstance(content, dict)
-                else content
-            )
-            if isinstance(names, list) and all(isinstance(n, str) for n in names):
-                logger.info('Loaded parameter names from file.', file=path)
-                return names
+                return {}
+            if isinstance(content, dict):
+                logger.info('Loaded analysis config file.', file=path)
+                return content
             logger.warning(
-                'Invalid parameter names file: expected a list of names or a '
-                'mapping with a `parameter_names` key.',
+                'Invalid analysis config file: expected a mapping, e.g. a '
+                '`parameter_names` key holding a list of names.',
                 file=path,
             )
-            return None
-        return None
+            return {}
+        return {}
 
     def refresh_h5web_labels(
         self, archive: 'EntryArchive', logger: 'BoundLogger'
@@ -232,12 +232,19 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
             file_base = os.path.basename(self.data_file)
             archive.metadata.entry_name = f'BOSS Analysis: {file_base}'
 
-        # Names set beforehand via an optional parameter_names.yml raw file;
+        # Names set beforehand via the optional boss_analysis.yml config file;
         # never overrides names already set (e.g. edited in the ELN)
         if self.data_file and not self.parameter_names:
-            self.parameter_names = (
-                self.load_parameter_names_file(archive, logger) or []
-            )
+            names = self.load_analysis_config(archive, logger).get('parameter_names')
+            if names is not None and not (
+                isinstance(names, list) and all(isinstance(n, str) for n in names)
+            ):
+                logger.warning(
+                    'Invalid `parameter_names` in analysis config: expected a '
+                    'list of names.',
+                )
+                names = None
+            self.parameter_names = names or []
 
         needs_compute = self.data_file and (
             not self.parameter_slices
