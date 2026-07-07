@@ -47,7 +47,7 @@ class BossParser(MatchingParser):
         logger.debug('BossParser.parse', mainfile=mainfile)
 
         # Get the data file name (handle both local and server contexts)
-        data_file = mainfile.split('/')[-1]
+        data_file = mainfile.rsplit('/', 1)[-1]
         if isinstance(archive.m_context, ServerContext):
             data_file = mainfile.split('/raw/', 1)[1]
 
