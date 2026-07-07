@@ -1,3 +1,6 @@
 data:
-  m_def: nomad_parser_plugin_boss.schema_packages.schema_package.NewSchemaPackage
-  name: Markus
+  m_def: nomad_parser_plugin_boss.schema_packages.schema_package.ELNBOSSAnalysis
+  data_file: boss.rst
+  parameter_names:
+    - x
+    - y

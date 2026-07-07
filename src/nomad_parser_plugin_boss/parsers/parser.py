@@ -44,7 +44,7 @@ class BossParser(MatchingParser):
         2. Calls create_archive() which triggers normalize() for BOSS data parsing
         3. Sets the current archive as a RawFile entry pointing to the measurement
         """
-        logger.info('BossParser.parse', mainfile=mainfile)
+        logger.debug('BossParser.parse', mainfile=mainfile)
 
         # Get the data file name (handle both local and server contexts)
         data_file = mainfile.split('/')[-1]
