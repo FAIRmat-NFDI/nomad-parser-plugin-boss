@@ -269,8 +269,6 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
         import os
 
         from boss.bo.results import BOResults
-        from boss.io.dump import build_query_points
-        from boss.pp.pp_main import PPMain
 
         # Resolve via raw_file so it works in both server and client contexts
         with archive.m_context.raw_file(self.data_file) as data_file_handle:
@@ -307,24 +305,24 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
 
         iteration_procedure = np.arange(iter_no, 0, -1)
 
+        # All parameters not in the slice are fixed to the global-minimum point
+        x_default = np.atleast_2d(res.select('x_glmin', iter_no))
+
         for parameter_counter, rank in enumerate(generate_slices(len(bounds))):
             main_rank, upper_rank = rank
             mu_all_slices, var_all_slices = [], []
 
+            # Query points on the 2D slice grid, built directly instead of via
+            # PPMain/build_query_points, whose pp_model_slice indexing changed
+            # between aalto-boss releases
+            x_grid, y_grid = np.meshgrid(
+                compute_parameters(main_rank), compute_parameters(upper_rank)
+            )
+            X = np.tile(x_default, (no_grid_points**2, 1))
+            X[:, main_rank] = x_grid.ravel()
+            X[:, upper_rank] = y_grid.ravel()
+
             for iteration in iteration_procedure:
-                pp = PPMain(
-                    res,
-                    pp_models=True,
-                    pp_iters=[iteration],
-                    pp_model_slice=[
-                        main_rank + 1,
-                        upper_rank + 1,
-                        no_grid_points,
-                    ],
-                )
-
-                X = build_query_points(pp.settings, res.select('x_glmin', iter_no))
-
                 mu, var = res.reconstruct_model(iteration).predict(X)
                 mu_all_slices.append(mu.reshape(no_grid_points, no_grid_points))
                 var_all_slices.append(var.reshape(no_grid_points, no_grid_points))
