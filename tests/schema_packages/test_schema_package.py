@@ -32,9 +32,11 @@ def test_h5web_attribute_map():
     assert attribute_map['/slice_2/parameters_x']['long_name'] == 'b'
     assert attribute_map['/slice_2/parameters_y']['long_name'] == 'c'
 
+    # The fixed NeXus constants are asserted here, example-based, exactly once
     group_attrs = attribute_map['/slice_0']
     assert group_attrs['NX_class'] == 'NXdata'
     assert group_attrs['signal'] == 'fit'
+    assert group_attrs['axes'] == ['iteration', 'parameters_x', 'parameters_y']
     assert group_attrs['auxiliary_signals'] == ['uncertainty']
     assert attribute_map['/slice_0/fit']['units'] == 'eV'
     assert attribute_map['/slice_0/uncertainty']['units'] == 'eV'
@@ -44,18 +46,19 @@ def test_h5web_attribute_map():
 def test_h5web_attribute_map_properties(names):
     """
     Hypothesis property test over arbitrary lists of 2-8 unique names.
+    Only input-dependent structure is asserted here; the fixed NeXus
+    constants are covered once in the example-based test above.
 
     Predicates, for `names` of length n:
       P1: the map contains exactly C(n,2) group paths, named
           /slice_0 .. /slice_{C(n,2)-1} in that order.
       P2: the (parameters_x, parameters_y) long_name pairs of the groups
           enumerate every index pair (i, j) with i < j exactly once, in
-          generate_slices order.
-      P3: every group is a complete NXdata block: NX_class='NXdata',
-          signal='fit', axes exactly ['iteration', 'parameters_x',
-          'parameters_y'], auxiliary_signals=['uncertainty'], and
-          title == f'{names[i]} vs {names[j]}' for its own pair.
-      P4: every group has attribute entries for all five datasets
+          generate_slices order — checked against the independent oracle
+          itertools.combinations.
+      P3 (relational): each group's title agrees with its own axis
+          long_names: title == f'{x} vs {y}'.
+      P4: every group carries attribute entries for all five datasets
           (fit, uncertainty, iteration, parameters_x, parameters_y).
     """
     attribute_map = h5web_attribute_map(names)
@@ -69,19 +72,49 @@ def test_h5web_attribute_map_properties(names):
         x_name = attribute_map[f'{group}/parameters_x']['long_name']
         y_name = attribute_map[f'{group}/parameters_y']['long_name']
         axis_pairs.append((names.index(x_name), names.index(y_name)))
-
-        group_attrs = attribute_map[group]
-        assert group_attrs['NX_class'] == 'NXdata'
-        assert group_attrs['signal'] == 'fit'
-        assert group_attrs['axes'] == ['iteration', 'parameters_x', 'parameters_y']
-        assert group_attrs['auxiliary_signals'] == ['uncertainty']
-        assert group_attrs['title'] == f'{x_name} vs {y_name}'
+        assert attribute_map[group]['title'] == f'{x_name} vs {y_name}'
         for dataset in ('fit', 'uncertainty', 'iteration', 'parameters_x',
                         'parameters_y'):
             assert f'{group}/{dataset}' in attribute_map
 
-    # every i<j pair appears exactly once, in generate_slices order
     assert axis_pairs == list(combinations(range(n), 2))
+
+
+@given(names=parameter_names)
+def test_h5web_attribute_map_rename_metamorphic(names):
+    """
+    Hypothesis metamorphic property: applying a bijective rename to the
+    input names must change exactly the name-derived attribute values and
+    nothing else.
+
+    Predicates, comparing map(names) with map(renamed) where
+    renamed[i] = names[i] + suffix (a bijection by construction):
+      M1: the set of attribute paths is identical.
+      M2: axis dataset long_names transform by exactly the rename mapping.
+      M3: group titles remain consistent with their own (renamed) axis
+          long_names; all other group attributes are unchanged.
+      M4: attributes of non-axis datasets are unchanged.
+    """
+    renamed = [f'{name}~renamed' for name in names]
+    mapping = dict(zip(names, renamed))
+    original = h5web_attribute_map(names)
+    transformed = h5web_attribute_map(renamed)
+
+    assert original.keys() == transformed.keys()  # M1
+    for path, attrs in original.items():
+        renamed_attrs = transformed[path]
+        assert attrs.keys() == renamed_attrs.keys()
+        if path.count('/') == 1:  # group
+            x_name = transformed[f'{path}/parameters_x']['long_name']
+            y_name = transformed[f'{path}/parameters_y']['long_name']
+            assert renamed_attrs['title'] == f'{x_name} vs {y_name}'  # M3
+            assert {k: v for k, v in renamed_attrs.items() if k != 'title'} == {
+                k: v for k, v in attrs.items() if k != 'title'
+            }
+        elif path.endswith(('/parameters_x', '/parameters_y')):
+            assert renamed_attrs['long_name'] == mapping[attrs['long_name']]  # M2
+        else:
+            assert renamed_attrs == attrs  # M4
 
 
 def test_first_pass_labels(upload_dir, synthetic_pes, assert_h5web_group):
