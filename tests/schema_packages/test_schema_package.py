@@ -43,9 +43,20 @@ def test_h5web_attribute_map():
 @given(names=parameter_names)
 def test_h5web_attribute_map_properties(names):
     """
-    For any list of unique names: one group per i<j combination in
-    generate_slices order, axis long_names pair up exactly with that
-    combination, and every group is a complete, well-formed NXdata block.
+    Hypothesis property test over arbitrary lists of 2-8 unique names.
+
+    Predicates, for `names` of length n:
+      P1: the map contains exactly C(n,2) group paths, named
+          /slice_0 .. /slice_{C(n,2)-1} in that order.
+      P2: the (parameters_x, parameters_y) long_name pairs of the groups
+          enumerate every index pair (i, j) with i < j exactly once, in
+          generate_slices order.
+      P3: every group is a complete NXdata block: NX_class='NXdata',
+          signal='fit', axes exactly ['iteration', 'parameters_x',
+          'parameters_y'], auxiliary_signals=['uncertainty'], and
+          title == f'{names[i]} vs {names[j]}' for its own pair.
+      P4: every group has attribute entries for all five datasets
+          (fit, uncertainty, iteration, parameters_x, parameters_y).
     """
     attribute_map = h5web_attribute_map(names)
 
@@ -156,6 +167,26 @@ def test_analysis_config_sets_names(
             title='phi vs psi',
             long_names={'parameters_x': 'phi', 'parameters_y': 'psi'},
         )
+
+
+def test_analysis_config_fallback_on_corrupt_file(upload_dir, synthetic_pes):
+    """A corrupt boss_analysis.yml must not prevent reading the .yaml one."""
+    (upload_dir / 'boss_analysis.yml').write_text('parameter_names: [unclosed')
+    (upload_dir / 'boss_analysis.yaml').write_text(
+        'parameter_names:\n  - phi\n  - psi\n'
+    )
+    mainfile = upload_dir / 'noname.archive.yaml'
+    mainfile.write_text(
+        'data:\n'
+        '  m_def: nomad_parser_plugin_boss.schema_packages.schema_package'
+        '.ELNBOSSAnalysis\n'
+        '  data_file: boss.rst\n'
+    )
+
+    archive = parse(str(mainfile))[0]
+    normalize_all(archive)
+
+    assert list(archive.data.parameter_names) == ['phi', 'psi']
 
 
 def test_analysis_config_does_not_override_eln(upload_dir, synthetic_pes):

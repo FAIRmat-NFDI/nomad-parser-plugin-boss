@@ -1,6 +1,7 @@
 import json
+import shutil
 
-from nomad.client import parse
+from nomad.client import normalize_all, parse
 from nomad.utils import hash as m_hash
 
 
@@ -15,6 +16,20 @@ def test_dual_entry_creation(upload_dir, synthetic_pes):
         f'{m_hash(upload_id, "boss.archive.json")}#data'
     )
     assert (upload_dir / 'boss.archive.json').exists()
+
+
+def test_dotted_filename_consistency(upload_dir, synthetic_pes):
+    """Only the final extension is stripped from the data file name, so the
+    child archive and the auxiliary .h5 share the same dotted stem."""
+    shutil.copy(upload_dir / 'boss.rst', upload_dir / 'my.run.rst')
+
+    parse(str(upload_dir / 'my.run.rst'))
+    assert (upload_dir / 'my.run.archive.json').exists()
+
+    measurement = parse(str(upload_dir / 'my.run.archive.json'))[0]
+    normalize_all(measurement)
+    assert measurement.data.auxiliary_file == 'my.run.h5'
+    assert (upload_dir / 'my.run.h5').exists()
 
 
 def test_reparse_preserves_edited_child(upload_dir, synthetic_pes):

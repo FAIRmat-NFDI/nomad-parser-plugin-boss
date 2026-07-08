@@ -85,7 +85,7 @@ class ParameterSpaceSlice(ArchiveSection):
         type=HDF5Reference,
         description="""
         Iteration number of the data aggregation process in the fit.
-        The starting data is labeled as 0
+        Iterations are numbered starting at 1 and stored in descending order.
         """,
     )
 
@@ -146,18 +146,20 @@ class PotentialEnergySurfaceFit(Schema):
                     content = yaml.safe_load(file_handle)
             except Exception as e:
                 logger.warning(
-                    'Could not read analysis config file.', file=path, error=str(e)
+                    'Could not read analysis config file. Trying next candidate.',
+                    file=path,
+                    error=str(e),
                 )
-                return {}
+                continue
             if isinstance(content, dict):
                 logger.info('Loaded analysis config file.', file=path)
                 return content
             logger.warning(
                 'Invalid analysis config file: expected a mapping, e.g. a '
-                '`parameter_names` key holding a list of names.',
+                '`parameter_names` key holding a list of names. '
+                'Trying next candidate.',
                 file=path,
             )
-            return {}
         return {}
 
     def refresh_h5web_labels(

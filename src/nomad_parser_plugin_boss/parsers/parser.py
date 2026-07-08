@@ -1,6 +1,5 @@
 from typing import TYPE_CHECKING
 
-from nomad.config import config
 from nomad.datamodel.context import ServerContext
 from nomad.parsing.parser import MatchingParser
 from nomad_measurements.utils import create_archive
@@ -13,10 +12,6 @@ from nomad_parser_plugin_boss.schema_packages.schema_package import (
 if TYPE_CHECKING:
     from nomad.datamodel.datamodel import EntryArchive
     from structlog.stdlib import BoundLogger
-
-configuration = config.get_plugin_entry_point(
-    'nomad_parser_plugin_boss.parsers:parser_entry_point'
-)
 
 
 class BossParser(MatchingParser):
@@ -56,10 +51,10 @@ class BossParser(MatchingParser):
         entry.data_file = data_file
         entry.m_context = archive.m_context
 
-        # Create the archive file for the ELN entry
-        # This will be named like: "my_boss_file.archive.json"
+        # Create the archive file for the ELN entry, stripping only the final
+        # extension so the name stays consistent with the auxiliary .h5 file.
         # The normalize() method will be called by the archive processing system
-        file_name = f'{"".join(data_file.split(".")[:-1])}.archive.json'
+        file_name = f'{data_file.rsplit(".", 1)[0]}.archive.json'
 
         # Set this archive as a RawFile entry with reference to the measurement
         archive.data = RawFileBOSSData(

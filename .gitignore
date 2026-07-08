@@ -128,3 +128,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Local drafts for upstream issues, not part of the plugin
+docs/upstream/
+
+# NOMAD runtime state
+.volumes/
