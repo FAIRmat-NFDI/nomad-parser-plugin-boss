@@ -49,9 +49,18 @@ def slice_group_names(parameter_names: list[str]) -> list[str]:
     Names of the HDF5 groups holding each 2D parameter-space slice, one per
     ``(i, j)`` index pair from `generate_slices` and in that order. Each group
     is named ``'{x}_vs_{y}'`` after the compared parameters so the H5Web tree
-    reflects what is plotted. A slice whose names do not yield a usable
-    component falls back to ``'slice_{index}'``, and any name that would still
-    collide is disambiguated, so the returned list is always unique.
+    reflects what is plotted.
+
+    The order of the two names is significant: ``x`` is the lower-index
+    parameter, shown on the ``parameters_x`` axis, and ``y`` is the
+    higher-index parameter, shown on ``parameters_y``. So ``'a_vs_b'`` and
+    ``'b_vs_a'`` denote different axis assignments and only the former is
+    produced (``generate_slices`` always yields ``i < j``).
+
+    A slice whose names do not yield a usable component falls back to
+    ``'slice_{index}'``, and any name that would still collide (e.g. from
+    duplicate parameter names) is disambiguated, so the returned list is
+    always unique.
     """
     names = list(parameter_names)
     proposed = []
