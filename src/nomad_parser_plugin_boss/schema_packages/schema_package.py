@@ -280,10 +280,20 @@ class PotentialEnergySurfaceFit(Schema):
         with archive.m_context.raw_file(self.auxiliary_file) as file_handle:
             h5_path = file_handle.name
         with h5py.File(h5_path, 'r+') as h5:
-            for old_group, new_group in renames.items():
-                old_key, new_key = old_group.lstrip('/'), new_group.lstrip('/')
-                if old_key in h5 and new_key not in h5:
-                    h5.move(old_key, new_key)
+            # Two-phase move: park every source under a unique temporary name,
+            # then move each temporary to its destination. A direct old->new
+            # move would skip any rename whose destination is still occupied by
+            # another group, silently corrupting permutation/cyclic renames
+            # (e.g. /a_vs_b and /a_vs_c swapping).
+            parked: list[tuple[str, str]] = []
+            for index, (old_group, new_group) in enumerate(renames.items()):
+                old_key = old_group.lstrip('/')
+                if old_key in h5:
+                    temporary_key = f'__rename_tmp_{index}__'
+                    h5.move(old_key, temporary_key)
+                    parked.append((temporary_key, new_group.lstrip('/')))
+            for temporary_key, new_key in parked:
+                h5.move(temporary_key, new_key)
 
         for parameter_slice, dataset, new_reference in reference_updates:
             setattr(parameter_slice, dataset, new_reference)

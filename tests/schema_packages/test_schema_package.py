@@ -238,6 +238,53 @@ def test_eln_edit_renames_group_and_refreshes_labels(
         assert np.array_equal(h5file['/alpha_vs_beta/fit'][()], fit_before)
 
 
+def test_eln_edit_permutation_preserves_data(upload_dir, synthetic_pes, monkeypatch):
+    """
+    A name edit that permutes the pairwise group names (e.g. swapping the labels
+    of two parameters) makes group names cycle. The rename must move the groups
+    consistently, so every slice still resolves to its own data rather than
+    another slice's. On the direct-move code this cycle silently swapped the data.
+    """
+    mainfile = upload_dir / 'three.archive.yaml'
+    mainfile.write_text(
+        'data:\n'
+        '  m_def: nomad_parser_plugin_boss.schema_packages.schema_package'
+        '.ELNBOSSAnalysis\n'
+        '  data_file: boss.rst\n'
+        '  parameter_names:\n    - a\n    - b\n    - c\n'
+    )
+    archive = parse(str(mainfile))[0]
+    normalize_all(archive)
+
+    # the synthetic _compute_pes writes float(counter) into each slice's fit;
+    # resolve each slice's value through its own reference
+    def fit_value(parameter_slice, h5file):
+        group = parameter_slice.fit.rsplit('#', 1)[1].rsplit('/', 1)[0].lstrip('/')
+        return h5file[f'{group}/fit'][0, 0, 0]
+
+    with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
+        before = [fit_value(s, h5file) for s in archive.data.parameter_slices]
+    assert before == [0.0, 1.0, 2.0]
+
+    # swap the labels of parameters 1 and 2: a_vs_b <-> a_vs_c cycle
+    edited = archive.data.m_to_dict(with_root_def=True)
+    edited['parameter_names'] = ['a', 'c', 'b']
+    edited_file = upload_dir / 'three.archive.json'
+    edited_file.write_text(json.dumps({'data': edited}))
+
+    def fail_compute(self, archive, logger):
+        pytest.fail('The expensive BOSS compute must not run on an ELN edit')
+
+    monkeypatch.setattr(ELNBOSSAnalysis, '_compute_pes', fail_compute)
+
+    edited_archive = parse(str(edited_file))[0]
+    normalize_all(edited_archive)
+
+    with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
+        after = [fit_value(s, h5file) for s in edited_archive.data.parameter_slices]
+    assert after == before  # each slice kept its own data through the cycle
+
+
 def test_recompute_clears_stale_groups(upload_dir, synthetic_pes):
     """
     A recomputation over an existing .h5 (e.g. after the analysis entry lost
