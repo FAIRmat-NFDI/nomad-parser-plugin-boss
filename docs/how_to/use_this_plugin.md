@@ -18,8 +18,14 @@ same run. The parser creates two entries:
 
 ## Parameter Names and Plot Labels
 
-The axis labels of the H5Web plots come from the `parameter_names` field of the
-BOSS Analysis entry. They can be set in three ways, in order of precedence:
+Each 2D slice of the parameter space is stored as an HDF5 group named after the
+two parameters it compares (e.g. `phi_vs_psi`), so the H5Web tree reflects what
+is plotted. The order is meaningful: the first name is the parameter on the
+x-axis and the second is on the y-axis (`phi_vs_psi` puts `phi` on x, `psi` on
+y), following the parameter order of the run. When names are edited, the groups
+are renamed to match. The axis labels of the H5Web plots come from the
+`parameter_names` field of the BOSS Analysis entry. They can be set in three
+ways, in order of precedence:
 
 1. **Edited in the ELN**: change `parameter_names` on the BOSS Analysis entry
    and save. The plot labels and titles update immediately; the fits are not
