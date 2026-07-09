@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -12,8 +13,8 @@ from structlog.testing import LogCapture
 from nomad_parser_plugin_boss.schema_packages.schema_package import (
     ELNBOSSAnalysis,
     ParameterSpaceSlice,
-    generate_slices,
     h5web_attribute_map,
+    slice_group_names,
 )
 
 DATA_DIR = Path(__file__).parent / 'data'
@@ -75,11 +76,17 @@ def synthetic_compute_pes(self, archive, logger):
     if not self.parameter_names:
         self.parameter_names = ['parameter_0', 'parameter_1']
     self.auxiliary_file = f'{self.data_file.rsplit(".", 1)[0]}.h5'
+    # Mirror the real _compute_pes: start from a clean file so stale groups
+    # from a previous computation do not linger
+    if archive.m_context.raw_path_exists(self.auxiliary_file):
+        with archive.m_context.raw_file(self.auxiliary_file, 'rb') as existing:
+            existing_path = existing.name
+        os.remove(existing_path)
     handler = HDF5Handler(filename=self.auxiliary_file, archive=archive, logger=logger)
 
     iterations = np.arange(2, 0, -1)
     grid = np.linspace(0.0, 1.0, num=5)
-    for counter, _ in enumerate(generate_slices(len(self.parameter_names))):
+    for counter, group in enumerate(slice_group_names(self.parameter_names)):
         self.parameter_slices.append(ParameterSpaceSlice())
         values = np.full((len(iterations), 5, 5), float(counter))
         for name, data in (
@@ -90,7 +97,7 @@ def synthetic_compute_pes(self, archive, logger):
             ('parameters_y', grid),
         ):
             handler.add_dataset(
-                path=f'/slice_{counter}/{name}',
+                path=f'/{group}/{name}',
                 dataset=Dataset(
                     data=data,
                     archive_path=f'data.parameter_slices[{counter}].{name}',

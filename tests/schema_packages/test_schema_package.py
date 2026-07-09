@@ -1,4 +1,5 @@
 import json
+import re
 from itertools import combinations
 
 import h5py
@@ -11,6 +12,8 @@ from nomad.client import normalize_all, parse
 from nomad_parser_plugin_boss.schema_packages.schema_package import (
     ELNBOSSAnalysis,
     h5web_attribute_map,
+    sanitize_h5_name,
+    slice_group_names,
 )
 
 parameter_names = st.lists(
@@ -18,28 +21,77 @@ parameter_names = st.lists(
 )
 
 
+def test_sanitize_h5_name():
+    # path separator, reference marker and whitespace runs collapse to '_'
+    assert sanitize_h5_name('phi') == 'phi'
+    assert sanitize_h5_name('a/b') == 'a_b'
+    assert sanitize_h5_name('a#b') == 'a_b'
+    assert sanitize_h5_name('spin  up') == 'spin_up'
+    assert sanitize_h5_name(' theta ') == 'theta'
+    # names with no usable characters collapse to empty
+    assert sanitize_h5_name('/') == ''
+    assert sanitize_h5_name('   ') == ''
+
+
+def test_slice_group_names():
+    # groups are named after the compared parameters, in generate_slices order
+    assert slice_group_names(['a', 'b', 'c']) == ['a_vs_b', 'a_vs_c', 'b_vs_c']
+    # a name that sanitizes to empty falls back to the indexed slice name
+    assert slice_group_names(['/', 'b']) == ['slice_0']
+    # names that sanitize to the same component would collide, so the
+    # duplicated group names are disambiguated with the slice index
+    assert slice_group_names(['x/y', 'x#y', 'z']) == [
+        'x_y_vs_x_y',
+        'x_y_vs_z_1',
+        'x_y_vs_z_2',
+    ]
+
+
 def test_h5web_attribute_map():
     attribute_map = h5web_attribute_map(['a', 'b', 'c'])
 
     # C(3, 2) = 3 slices, pairing follows generate_slices: (a,b), (a,c), (b,c)
     assert [key for key in attribute_map if key.count('/') == 1] == [
-        '/slice_0',
-        '/slice_1',
-        '/slice_2',
+        '/a_vs_b',
+        '/a_vs_c',
+        '/b_vs_c',
     ]
-    assert attribute_map['/slice_0']['title'] == 'a vs b'
-    assert attribute_map['/slice_1']['title'] == 'a vs c'
-    assert attribute_map['/slice_2/parameters_x']['long_name'] == 'b'
-    assert attribute_map['/slice_2/parameters_y']['long_name'] == 'c'
+    assert attribute_map['/a_vs_b']['title'] == 'a vs b'
+    assert attribute_map['/a_vs_c']['title'] == 'a vs c'
+    assert attribute_map['/b_vs_c/parameters_x']['long_name'] == 'b'
+    assert attribute_map['/b_vs_c/parameters_y']['long_name'] == 'c'
 
     # The fixed NeXus constants are asserted here, example-based, exactly once
-    group_attrs = attribute_map['/slice_0']
+    group_attrs = attribute_map['/a_vs_b']
     assert group_attrs['NX_class'] == 'NXdata'
     assert group_attrs['signal'] == 'fit'
     assert group_attrs['axes'] == ['iteration', 'parameters_x', 'parameters_y']
     assert group_attrs['auxiliary_signals'] == ['uncertainty']
-    assert attribute_map['/slice_0/fit']['units'] == 'eV'
-    assert attribute_map['/slice_0/uncertainty']['units'] == 'eV'
+    assert attribute_map['/a_vs_b/fit']['units'] == 'eV'
+    assert attribute_map['/a_vs_b/uncertainty']['units'] == 'eV'
+
+
+@given(names=parameter_names)
+def test_slice_group_names_properties(names):
+    """
+    Hypothesis property test for `slice_group_names` over arbitrary lists of
+    2-8 unique names.
+
+    Predicates, for `names` of length n:
+      G1: exactly C(n,2) group names are produced.
+      G2: every group name is HDF5-path-safe: non-empty and free of '/',
+          '#', and whitespace (they are used directly as path components).
+      G3: the group names are unique (no two slices share a group), which
+          adversarial sanitization collisions must not violate.
+    """
+    group_names = slice_group_names(names)
+    n = len(names)
+
+    assert len(group_names) == n * (n - 1) // 2  # G1
+    for group_name in group_names:
+        assert group_name  # G2
+        assert not re.search(r'[\s/#]', group_name)  # G2
+    assert len(set(group_names)) == len(group_names)  # G3
 
 
 @given(names=parameter_names)
@@ -50,12 +102,13 @@ def test_h5web_attribute_map_properties(names):
     constants are covered once in the example-based test above.
 
     Predicates, for `names` of length n:
-      P1: the map contains exactly C(n,2) group paths, named
-          /slice_0 .. /slice_{C(n,2)-1} in that order.
+      P1: the map contains exactly C(n,2) group paths, one per slice group
+          from `slice_group_names`, in that order.
       P2: the (parameters_x, parameters_y) long_name pairs of the groups
           enumerate every index pair (i, j) with i < j exactly once, in
           generate_slices order — checked against the independent oracle
-          itertools.combinations.
+          itertools.combinations. long_names carry the original (unsanitized)
+          names, so the lookup is exact.
       P3 (relational): each group's title agrees with its own axis
           long_names: title == f'{x} vs {y}'.
       P4: every group carries attribute entries for all five datasets
@@ -65,7 +118,7 @@ def test_h5web_attribute_map_properties(names):
 
     groups = [key for key in attribute_map if key.count('/') == 1]
     n = len(names)
-    assert groups == [f'/slice_{i}' for i in range(n * (n - 1) // 2)]
+    assert groups == [f'/{group}' for group in slice_group_names(names)]  # P1
 
     axis_pairs = []
     for group in groups:
@@ -84,12 +137,16 @@ def test_h5web_attribute_map_properties(names):
 def test_h5web_attribute_map_rename_metamorphic(names):
     """
     Hypothesis metamorphic property: applying a bijective rename to the
-    input names must change exactly the name-derived attribute values and
-    nothing else.
+    input names must transform exactly the name-derived values (group paths,
+    axis long_names, titles) and leave every other attribute untouched.
 
-    Predicates, comparing map(names) with map(renamed) where
-    renamed[i] = names[i] + suffix (a bijection by construction):
-      M1: the set of attribute paths is identical.
+    The rename appends '~renamed' to each name. Because group paths now
+    encode the parameter names, the two maps have different keys but the same
+    structure, so entries are compared position-by-position.
+
+    Predicates, comparing map(names) with map(renamed):
+      M1: both maps have the same number of entries and each aligned pair
+          sits at the same structural depth (group vs dataset).
       M2: axis dataset long_names transform by exactly the rename mapping.
       M3: group titles remain consistent with their own (renamed) axis
           long_names; all other group attributes are unchanged.
@@ -100,13 +157,15 @@ def test_h5web_attribute_map_rename_metamorphic(names):
     original = h5web_attribute_map(names)
     transformed = h5web_attribute_map(renamed)
 
-    assert original.keys() == transformed.keys()  # M1
-    for path, attrs in original.items():
-        renamed_attrs = transformed[path]
+    assert len(original) == len(transformed)  # M1
+    for (path, attrs), (renamed_path, renamed_attrs) in zip(
+        original.items(), transformed.items()
+    ):
+        assert path.count('/') == renamed_path.count('/')  # M1
         assert attrs.keys() == renamed_attrs.keys()
-        if path.count('/') == 1:  # group
-            x_name = transformed[f'{path}/parameters_x']['long_name']
-            y_name = transformed[f'{path}/parameters_y']['long_name']
+        if path.count('/') == 1:  # group node
+            x_name = transformed[f'{renamed_path}/parameters_x']['long_name']
+            y_name = transformed[f'{renamed_path}/parameters_y']['long_name']
             assert renamed_attrs['title'] == f'{x_name} vs {y_name}'  # M3
             assert {k: v for k, v in renamed_attrs.items() if k != 'title'} == {
                 k: v for k, v in attrs.items() if k != 'title'
@@ -125,30 +184,31 @@ def test_first_pass_labels(upload_dir, synthetic_pes, assert_h5web_group):
     assert data.auxiliary_file == 'boss.h5'
     fit_reference = data.parameter_slices[0].fit
     assert fit_reference.startswith('/uploads/')
-    assert fit_reference.rsplit('#', 1)[-1] == '/slice_0/fit'
+    assert fit_reference.rsplit('#', 1)[-1] == '/x_vs_y/fit'
 
     with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
         assert_h5web_group(
             h5file,
-            '/slice_0',
+            '/x_vs_y',
             title='x vs y',
             long_names={'parameters_x': 'x', 'parameters_y': 'y'},
         )
 
 
-def test_eln_edit_refreshes_labels(
+def test_eln_edit_renames_group_and_refreshes_labels(
     upload_dir, synthetic_pes, assert_h5web_group, monkeypatch
 ):
     """
     Replicate the editable-archive flow: a GUI edit rewrites the .archive.json
-    and re-runs normalization (no parser). The labels in the auxiliary HDF5 file
-    must follow the edited parameter_names without recomputing the fits.
+    and re-runs normalization (no parser). The slice group is renamed after the
+    edited parameter_names and the labels follow, without recomputing the fits:
+    the group is moved (data preserved) and the HDF5References are rewritten.
     """
     archive = parse(str(upload_dir / 'test.archive.yaml'))[0]
     normalize_all(archive)
 
     with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
-        fit_before = h5file['/slice_0/fit'][()]
+        fit_before = h5file['/x_vs_y/fit'][()]
 
     edited_data = archive.data.m_to_dict(with_root_def=True)
     edited_data['parameter_names'] = ['alpha', 'beta']
@@ -163,14 +223,45 @@ def test_eln_edit_refreshes_labels(
     edited_archive = parse(str(edited_file))[0]
     normalize_all(edited_archive)
 
+    # the HDF5Reference now points at the renamed group
+    fit_reference = edited_archive.data.parameter_slices[0].fit
+    assert fit_reference.rsplit('#', 1)[-1] == '/alpha_vs_beta/fit'
+
     with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
+        assert '/x_vs_y' not in h5file  # group was moved, not copied
         assert_h5web_group(
             h5file,
-            '/slice_0',
+            '/alpha_vs_beta',
             title='alpha vs beta',
             long_names={'parameters_x': 'alpha', 'parameters_y': 'beta'},
         )
-        assert np.array_equal(h5file['/slice_0/fit'][()], fit_before)
+        assert np.array_equal(h5file['/alpha_vs_beta/fit'][()], fit_before)
+
+
+def test_recompute_clears_stale_groups(upload_dir, synthetic_pes):
+    """
+    A recomputation over an existing .h5 (e.g. after the analysis entry lost
+    its computed slices) must rebuild a clean file, not leave the previously
+    named group behind.
+    """
+    archive = parse(str(upload_dir / 'test.archive.yaml'))[0]  # names x, y
+    normalize_all(archive)
+    with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
+        assert set(h5file.keys()) == {'x_vs_y'}
+
+    # the archive file lost its slices and carries different names, forcing a
+    # recomputation while the old .h5 (with the /x_vs_y group) is still present
+    edited = archive.data.m_to_dict(with_root_def=True)
+    edited['parameter_names'] = ['alpha', 'beta']
+    edited['parameter_slices'] = []
+    edited_file = upload_dir / 'boss.archive.json'
+    edited_file.write_text(json.dumps({'data': edited}))
+
+    edited_archive = parse(str(edited_file))[0]
+    normalize_all(edited_archive)
+
+    with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
+        assert set(h5file.keys()) == {'alpha_vs_beta'}
 
 
 @pytest.mark.parametrize(
@@ -196,7 +287,7 @@ def test_analysis_config_sets_names(
     with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
         assert_h5web_group(
             h5file,
-            '/slice_0',
+            '/phi_vs_psi',
             title='phi vs psi',
             long_names={'parameters_x': 'phi', 'parameters_y': 'psi'},
         )
@@ -250,10 +341,11 @@ def test_name_count_mismatch_warns(
     ]
     assert warnings, 'expected a slice-count mismatch warning'
 
+    # the mismatch aborts the refresh, so the group keeps its original name
     with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
         assert_h5web_group(
             h5file,
-            '/slice_0',
+            '/x_vs_y',
             title='x vs y',
             long_names={'parameters_x': 'x', 'parameters_y': 'y'},
         )
@@ -268,11 +360,11 @@ def test_real_boss_compute(upload_dir, assert_h5web_group):
     data = archive.data
     assert len(data.parameter_slices) == 1
     with h5py.File(upload_dir / 'boss.h5', 'r') as h5file:
-        assert h5file['/slice_0/fit'].shape[1:] == (50, 50)
-        assert h5file['/slice_0/fit'].shape[0] == h5file['/slice_0/iteration'].shape[0]
+        assert h5file['/x_vs_y/fit'].shape[1:] == (50, 50)
+        assert h5file['/x_vs_y/fit'].shape[0] == h5file['/x_vs_y/iteration'].shape[0]
         assert_h5web_group(
             h5file,
-            '/slice_0',
+            '/x_vs_y',
             title='x vs y',
             long_names={'parameters_x': 'x', 'parameters_y': 'y'},
         )

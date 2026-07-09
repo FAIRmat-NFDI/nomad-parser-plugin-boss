@@ -1,3 +1,5 @@
+import re
+from collections import Counter
 from collections.abc import Generator
 from typing import TYPE_CHECKING
 
@@ -21,12 +23,53 @@ if TYPE_CHECKING:
 
 m_package = SchemaPackage()
 
+# Datasets written per slice group, in the order H5Web expects them.
+SLICE_DATASETS = ('fit', 'uncertainty', 'iteration', 'parameters_x', 'parameters_y')
+
 
 def generate_slices(ranks: int) -> Generator:
     """Produce all possible index pairs defining slices of the parameter space."""
     for main_rank in range(ranks):
         for upper_rank in range(main_rank + 1, ranks):
             yield main_rank, upper_rank
+
+
+def sanitize_h5_name(name: str) -> str:
+    """
+    Make a parameter name safe as an HDF5 path component: collapse the path
+    separator ``/``, the reference-fragment marker ``#``, and whitespace runs
+    into single underscores. May return ``''`` for a name with no usable
+    characters (e.g. ``'/'`` or ``'   '``).
+    """
+    return re.sub(r'[\s/#]+', '_', name).strip('_')
+
+
+def slice_group_names(parameter_names: list[str]) -> list[str]:
+    """
+    Names of the HDF5 groups holding each 2D parameter-space slice, one per
+    ``(i, j)`` index pair from `generate_slices` and in that order. Each group
+    is named ``'{x}_vs_{y}'`` after the compared parameters so the H5Web tree
+    reflects what is plotted. A slice whose names do not yield a usable
+    component falls back to ``'slice_{index}'``, and any name that would still
+    collide is disambiguated, so the returned list is always unique.
+    """
+    names = list(parameter_names)
+    proposed = []
+    for index, (main_rank, upper_rank) in enumerate(generate_slices(len(names))):
+        x = sanitize_h5_name(names[main_rank])
+        y = sanitize_h5_name(names[upper_rank])
+        proposed.append(f'{x}_vs_{y}' if x and y else f'slice_{index}')
+
+    counts = Counter(proposed)
+    used: set[str] = set()
+    result: list[str] = []
+    for index, name in enumerate(proposed):
+        unique_name = f'{name}_{index}' if counts[name] > 1 else name
+        while unique_name in used:
+            unique_name = f'{unique_name}_dup'
+        used.add(unique_name)
+        result.append(unique_name)
+    return result
 
 
 def h5web_attribute_map(parameter_names: list[str]) -> dict[str, dict]:
@@ -36,9 +79,12 @@ def h5web_attribute_map(parameter_names: list[str]) -> dict[str, dict]:
     Axis labels come from the `long_name` attribute of the axis datasets.
     """
     names = list(parameter_names)
+    group_names = slice_group_names(names)
     attribute_map = {}
-    for counter, (main_rank, upper_rank) in enumerate(generate_slices(len(names))):
-        prefix = f'/slice_{counter}'
+    for group_name, (main_rank, upper_rank) in zip(
+        group_names, generate_slices(len(names))
+    ):
+        prefix = f'/{group_name}'
         attribute_map[prefix] = dict(
             NX_class='NXdata',
             signal='fit',
@@ -166,9 +212,10 @@ class PotentialEnergySurfaceFit(Schema):
         self, archive: 'EntryArchive', logger: 'BoundLogger'
     ) -> None:
         """
-        Write the current `parameter_names` as NeXus attributes into the auxiliary
-        HDF5 file. Runs on every normalization, so ELN edits of `parameter_names`
-        update the H5Web axis labels without recomputing the fits.
+        Reconcile the auxiliary HDF5 file with the current `parameter_names`.
+        Runs on every normalization, so ELN edits of `parameter_names` rename the
+        slice groups after the compared parameters and update the H5Web axis
+        labels without recomputing the fits.
         """
         if not self.parameter_names or not self.auxiliary_file:
             return
@@ -188,12 +235,58 @@ class PotentialEnergySurfaceFit(Schema):
             )
             return
 
+        self._rename_slice_groups(archive, slice_group_names(self.parameter_names))
+
         handler = HDF5Handler(
             filename=self.auxiliary_file, archive=archive, logger=logger
         )
         for path, attributes in h5web_attribute_map(self.parameter_names).items():
             handler.add_attribute(path=path, params=attributes)
         handler.write_file()
+
+    def _rename_slice_groups(
+        self, archive: 'EntryArchive', group_names: list[str]
+    ) -> None:
+        """
+        Rename the HDF5 slice groups to `group_names` and rewrite the affected
+        `HDF5Reference` values. The rename is a metadata-only `h5py` move (no
+        data copy); groups whose name is already correct are left untouched.
+        """
+        import h5py
+
+        renames: dict[str, str] = {}
+        reference_updates: list[tuple[ParameterSpaceSlice, str, str]] = []
+        for group_name, parameter_slice in zip(group_names, self.parameter_slices):
+            reference = parameter_slice.fit
+            if not reference or '#' not in reference:
+                continue
+            current_group = reference.split('#', 1)[1].rsplit('/', 1)[0]
+            new_group = f'/{group_name}'
+            if current_group == new_group:
+                continue
+            renames[current_group] = new_group
+            for dataset in SLICE_DATASETS:
+                dataset_reference = getattr(parameter_slice, dataset)
+                if dataset_reference and '#' in dataset_reference:
+                    prefix = dataset_reference.split('#', 1)[0]
+                    reference_updates.append(
+                        (parameter_slice, dataset, f'{prefix}#{new_group}/{dataset}')
+                    )
+
+        if not renames:
+            return
+
+        # Resolve the on-disk path; only `.name` is used, so open mode is moot
+        with archive.m_context.raw_file(self.auxiliary_file) as file_handle:
+            h5_path = file_handle.name
+        with h5py.File(h5_path, 'r+') as h5:
+            for old_group, new_group in renames.items():
+                old_key, new_key = old_group.lstrip('/'), new_group.lstrip('/')
+                if old_key in h5 and new_key not in h5:
+                    h5.move(old_key, new_key)
+
+        for parameter_slice, dataset, new_reference in reference_updates:
+            setattr(parameter_slice, dataset, new_reference)
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
         super().normalize(archive, logger)
@@ -303,6 +396,13 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
 
         h5_filename = f'{self.data_file.rsplit(".", 1)[0]}.h5'
         self.auxiliary_file = h5_filename
+        # Start from a clean file: a recomputation over an existing .h5 would
+        # otherwise leave stale groups behind (e.g. slices named under a
+        # previous set of parameter names)
+        if archive.m_context.raw_path_exists(h5_filename):
+            with archive.m_context.raw_file(h5_filename, 'rb') as existing:
+                existing_path = existing.name
+            os.remove(existing_path)
         handler = HDF5Handler(filename=h5_filename, archive=archive, logger=logger)
 
         iteration_procedure = np.arange(iter_no, 0, -1)
@@ -310,8 +410,10 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
         # All parameters not in the slice are fixed to the global-minimum point
         x_default = np.atleast_2d(res.select('x_glmin', iter_no))
 
+        group_names = slice_group_names(self.parameter_names)
         for parameter_counter, rank in enumerate(generate_slices(len(bounds))):
             main_rank, upper_rank = rank
+            group = group_names[parameter_counter]
             mu_all_slices, var_all_slices = [], []
 
             # Query points on the 2D slice grid, built directly instead of via
@@ -331,53 +433,21 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
 
             self.parameter_slices.append(ParameterSpaceSlice())
 
-            handler.add_dataset(
-                path=f'/slice_{parameter_counter}/fit',
-                dataset=Dataset(
-                    data=np.array(mu_all_slices),
-                    archive_path=f'data.parameter_slices[{parameter_counter}].fit',
-                ),
-            )
-
-            handler.add_dataset(
-                path=f'/slice_{parameter_counter}/uncertainty',
-                dataset=Dataset(
-                    data=np.sqrt(np.array(var_all_slices)),
-                    archive_path=(
-                        f'data.parameter_slices[{parameter_counter}].uncertainty'
+            archive_prefix = f'data.parameter_slices[{parameter_counter}]'
+            for dataset, data in (
+                ('fit', np.array(mu_all_slices)),
+                ('uncertainty', np.sqrt(np.array(var_all_slices))),
+                ('iteration', iteration_procedure),
+                ('parameters_x', np.array(compute_parameters(main_rank))),
+                ('parameters_y', np.array(compute_parameters(upper_rank))),
+            ):
+                handler.add_dataset(
+                    path=f'/{group}/{dataset}',
+                    dataset=Dataset(
+                        data=data,
+                        archive_path=f'{archive_prefix}.{dataset}',
                     ),
-                ),
-            )
-
-            handler.add_dataset(
-                path=f'/slice_{parameter_counter}/iteration',
-                dataset=Dataset(
-                    data=iteration_procedure,
-                    archive_path=(
-                        f'data.parameter_slices[{parameter_counter}].iteration'
-                    ),
-                ),
-            )
-
-            handler.add_dataset(
-                path=f'/slice_{parameter_counter}/parameters_x',
-                dataset=Dataset(
-                    data=np.array(compute_parameters(main_rank)),
-                    archive_path=(
-                        f'data.parameter_slices[{parameter_counter}].parameters_x'
-                    ),
-                ),
-            )
-
-            handler.add_dataset(
-                path=f'/slice_{parameter_counter}/parameters_y',
-                dataset=Dataset(
-                    data=np.array(compute_parameters(upper_rank)),
-                    archive_path=(
-                        f'data.parameter_slices[{parameter_counter}].parameters_y'
-                    ),
-                ),
-            )
+                )
 
         for path, attributes in h5web_attribute_map(self.parameter_names).items():
             handler.add_attribute(path=path, params=attributes)
