@@ -463,13 +463,10 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
             for iteration in iteration_procedure:
                 mesh.fix_dim_preset(res, 'min', itr=int(iteration))
                 model = res.reconstruct_model(int(iteration))
-                # bind model per iteration; evaluate_func returns a 1-tuple
-                (mean,) = mesh.evaluate_func(lambda X, m=model: m.predict(X)[0])
-                (std,) = mesh.evaluate_func(
-                    lambda X, m=model: np.sqrt(m.predict(X)[1])
-                )
+                # one predict pass; evaluate_func splits the (mean, variance) tuple
+                mean, variance = mesh.evaluate_func(lambda X, m=model: m.predict(X))
                 fit_slices.append(np.asarray(mean))
-                uncertainty_slices.append(np.asarray(std))
+                uncertainty_slices.append(np.sqrt(np.asarray(variance)))
 
             self.parameter_slices.append(ParameterSpaceSlice())
 
