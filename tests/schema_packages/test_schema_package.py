@@ -16,35 +16,49 @@ from nomad_parser_plugin_boss.schema_packages.schema_package import (
     slice_group_names,
 )
 
+# Unique names: needed by the map/metamorphic tests, whose `names.index(...)`
+# oracle is ambiguous under duplicates.
 parameter_names = st.lists(
     st.text(min_size=1, max_size=12), min_size=2, max_size=8, unique=True
 )
+# Names that may repeat: for the group-name uniqueness property, which must
+# hold even when parameters share a name.
+parameter_names_maybe_duplicated = st.lists(
+    st.text(min_size=1, max_size=12), min_size=2, max_size=8
+)
 
 
-def test_sanitize_h5_name():
-    # path separator, reference marker and whitespace runs collapse to '_'
-    assert sanitize_h5_name('phi') == 'phi'
-    assert sanitize_h5_name('a/b') == 'a_b'
-    assert sanitize_h5_name('a#b') == 'a_b'
-    assert sanitize_h5_name('spin  up') == 'spin_up'
-    assert sanitize_h5_name(' theta ') == 'theta'
-    # names with no usable characters collapse to empty
-    assert sanitize_h5_name('/') == ''
-    assert sanitize_h5_name('   ') == ''
+@pytest.mark.parametrize(
+    ('raw', 'expected'),
+    [
+        ('phi', 'phi'),
+        ('a/b', 'a_b'),  # path separator
+        ('a#b', 'a_b'),  # reference-fragment marker
+        ('spin  up', 'spin_up'),  # whitespace run
+        (' theta ', 'theta'),  # surrounding whitespace stripped
+        ('/', ''),  # no usable characters
+        ('   ', ''),
+    ],
+)
+def test_sanitize_h5_name(raw, expected):
+    assert sanitize_h5_name(raw) == expected
 
 
-def test_slice_group_names():
-    # groups are named after the compared parameters, in generate_slices order
-    assert slice_group_names(['a', 'b', 'c']) == ['a_vs_b', 'a_vs_c', 'b_vs_c']
-    # a name that sanitizes to empty falls back to the indexed slice name
-    assert slice_group_names(['/', 'b']) == ['slice_0']
-    # names that sanitize to the same component would collide, so the
-    # duplicated group names are disambiguated with the slice index
-    assert slice_group_names(['x/y', 'x#y', 'z']) == [
-        'x_y_vs_x_y',
-        'x_y_vs_z_1',
-        'x_y_vs_z_2',
-    ]
+@pytest.mark.parametrize(
+    ('names', 'expected'),
+    [
+        # named after the compared parameters, in generate_slices order
+        (['a', 'b', 'c'], ['a_vs_b', 'a_vs_c', 'b_vs_c']),
+        # a name that sanitizes to empty falls back to the indexed slice name
+        (['/', 'b'], ['slice_0']),
+        # names sanitizing to the same component collide -> disambiguated
+        (['x/y', 'x#y', 'z'], ['x_y_vs_x_y', 'x_y_vs_z_1', 'x_y_vs_z_2']),
+        # duplicate parameter names collide the same way and stay unique
+        (['a', 'a', 'b'], ['a_vs_a', 'a_vs_b_1', 'a_vs_b_2']),
+    ],
+)
+def test_slice_group_names(names, expected):
+    assert slice_group_names(names) == expected
 
 
 def test_h5web_attribute_map():
@@ -71,23 +85,21 @@ def test_h5web_attribute_map():
     assert attribute_map['/a_vs_b/uncertainty']['units'] == 'eV'
 
 
-@given(names=parameter_names)
+@given(names=parameter_names_maybe_duplicated)
 def test_slice_group_names_properties(names):
     """
     Hypothesis property test for `slice_group_names` over arbitrary lists of
-    2-8 unique names.
+    2-8 names, duplicates allowed. The count (C(n,2)) is structural and pinned
+    by the example tests; generation targets the two invariants that adversarial
+    input can break, including parameters that share a name:
 
-    Predicates, for `names` of length n:
-      G1: exactly C(n,2) group names are produced.
-      G2: every group name is HDF5-path-safe: non-empty and free of '/',
-          '#', and whitespace (they are used directly as path components).
-      G3: the group names are unique (no two slices share a group), which
-          adversarial sanitization collisions must not violate.
+      G2: every group name is HDF5-path-safe -- non-empty and free of '/', '#',
+          and whitespace, since it is used directly as a path component.
+      G3: the group names are unique, even when sanitization collisions or
+          duplicate parameter names would otherwise produce the same name.
     """
     group_names = slice_group_names(names)
-    n = len(names)
 
-    assert len(group_names) == n * (n - 1) // 2  # G1
     for group_name in group_names:
         assert group_name  # G2
         assert not re.search(r'[\s/#]', group_name)  # G2
