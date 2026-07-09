@@ -5,10 +5,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python 3.9
+    - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
-        python-version: 3.9
+        python-version: '3.12'
     - name: Install dependencies
       run: |
         pip install --upgrade pip
@@ -27,10 +27,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python 3.9
+    - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
-        python-version: 3.9
+        python-version: '3.12'
     - name: Build the package
       run: |
         pip install --upgrade pip
@@ -43,8 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: chartboost/ruff-action@v1
+      - uses: astral-sh/ruff-action@v3
         with:
+          version: "0.14.5"
           args: "check ."
   # to enable auto-formatting check, uncomment the following lines below
   # ruff-formatting:

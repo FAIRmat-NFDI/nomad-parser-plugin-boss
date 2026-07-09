@@ -7,7 +7,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -17,7 +16,7 @@ name = "nomad-parser-plugin-boss"
 description = "Plugin for parsing and displaying BOSS PES arftifacts"
 version = "0.1.0"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "Nathan Daelman", email = "nathan.daelman@physik.hu-berlin.de" },
 ]
@@ -27,15 +26,17 @@ maintainers = [
 license = { file = "LICENSE" }
 dependencies = [
     "nomad-lab>=1.3.0",
+    "nomad-measurements>=1.3.3",
     "python-magic-bin; sys_platform == 'win32'",
     "aalto-boss>=1.12.0",
+    "PyYAML",
 ]
 
 [project.urls]
 Repository = "https://github.com/FAIRmat-NFDI/nomad-parser-plugin-boss"
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest", "structlog"]
+dev = ["ruff", "pytest", "structlog", "hypothesis", "python-logstash"]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
@@ -106,6 +107,11 @@ skip-magic-trailing-comma = false
 # Like Black, automatically detect the appropriate line ending.
 line-ending = "auto"
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: runs the real BOSS postprocessing (deselect with '-m \"not slow\"')",
+]
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 
@@ -114,7 +120,7 @@ where = ["src"]
 
 [project.entry-points.'nomad.plugin']
 parser_entry_point = "nomad_parser_plugin_boss.parsers:parser_entry_point"
-# schema_package_entry_point = "nomad_parser_plugin_boss.schema_packages:schema_package_entry_point"
+schema_package_entry_point = "nomad_parser_plugin_boss.schema_packages:schema_package_entry_point"
 # example_upload_entry_point = "nomad_parser_plugin_boss.example_uploads:example_upload_entry_point"
 
 [tool.cruft]

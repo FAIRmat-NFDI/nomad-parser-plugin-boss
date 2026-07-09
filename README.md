@@ -4,6 +4,37 @@ Plugin for parsing and displaying BOSS PES arftifacts
 
 This `nomad` plugin was generated with `Cookiecutter` along with `@nomad`'s [`cookiecutter-nomad-plugin`](https://github.com/FAIRmat-NFDI/cookiecutter-nomad-plugin) template.
 
+## Usage
+
+Upload a BOSS restart file (`.rst`) together with its `boss.out` log. This
+creates a raw-file entry plus an editable **BOSS Analysis** entry whose
+Overview shows the interactive H5Web visualization of the PES fit.
+
+Plot axis labels come from the entry's `parameter_names`, settable three ways
+(highest precedence first): editing the ELN (labels refresh on save without
+recomputing the fits), an optional `boss_analysis.yml` config file uploaded
+next to the `.rst` file, or generated defaults (`parameter_0`, ...):
+
+```yaml
+# boss_analysis.yml — mapping layout leaves room for future analysis options
+parameter_names:
+  - phi
+  - psi
+```
+
+Note that reprocessing an upload does not reset previously set names — the
+analysis entry persists and user edits win. See
+[How to Use This Plugin](docs/how_to/use_this_plugin.md) for details.
+
+## ⚠️ Important Dependency Note
+
+**Temporary Workaround**: This plugin requires `aalto-boss>=1.12.0`, which depends on `GPy>=1.13.1`. GPy has a hard constraint of `scipy<=1.12.0`, which conflicts with newer versions of `pymatgen` (>=2025.10.7) that require `scipy>=1.13.0`.
+
+**Current solution**: In deployments that also install `pymatgen` (e.g. a NOMAD distribution), constrain `pymatgen<2025.10.7` in that downstream project's dependencies to maintain compatibility. This constraint lives outside this repository and should be removed once GPy updates to support `scipy>=1.13.0`.
+
+**Tracking**:
+- GPy issue: https://github.com/SheffieldML/GPy/issues (scipy compatibility)
+- This workaround was added on 2025-11-20
 
 ## Development
 
