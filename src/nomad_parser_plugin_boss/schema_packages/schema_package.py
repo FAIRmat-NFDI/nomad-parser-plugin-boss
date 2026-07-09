@@ -402,6 +402,7 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
         import os
 
         from boss.bo.results import BOResults
+        from boss.pp.mesh import Mesh
 
         # Resolve via raw_file so it works in both server and client contexts
         with archive.m_context.raw_file(self.data_file) as data_file_handle:
@@ -445,36 +446,37 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
 
         iteration_procedure = np.arange(iter_no, 0, -1)
 
-        # All parameters not in the slice are fixed to the global-minimum point
-        x_default = np.atleast_2d(res.select('x_glmin', iter_no))
-
         group_names = slice_group_names(self.parameter_names)
         for parameter_counter, rank in enumerate(generate_slices(len(bounds))):
             main_rank, upper_rank = rank
             group = group_names[parameter_counter]
-            mu_all_slices, var_all_slices = [], []
+            fit_slices, uncertainty_slices = [], []
 
-            # Query points on the 2D slice grid, built directly instead of via
-            # PPMain/build_query_points, whose pp_model_slice indexing changed
-            # between aalto-boss releases
-            x_grid, y_grid = np.meshgrid(
-                compute_parameters(main_rank), compute_parameters(upper_rank)
+            # BOSS' Mesh builds the 2D slice grid over the two active dimensions
+            # and fixes the rest to the global minimum (the 'min' preset resolves
+            # to select('x_glmin')), replacing the hand-rolled query grid.
+            mesh = Mesh(
+                res.bounds,
+                active_dims=[main_rank, upper_rank],
+                grid_pts=no_grid_points,
             )
-            X = np.tile(x_default, (no_grid_points**2, 1))
-            X[:, main_rank] = x_grid.ravel()
-            X[:, upper_rank] = y_grid.ravel()
-
             for iteration in iteration_procedure:
-                mu, var = res.reconstruct_model(iteration).predict(X)
-                mu_all_slices.append(mu.reshape(no_grid_points, no_grid_points))
-                var_all_slices.append(var.reshape(no_grid_points, no_grid_points))
+                mesh.fix_dim_preset(res, 'min', itr=int(iteration))
+                model = res.reconstruct_model(int(iteration))
+                # bind model per iteration; evaluate_func returns a 1-tuple
+                (mean,) = mesh.evaluate_func(lambda X, m=model: m.predict(X)[0])
+                (std,) = mesh.evaluate_func(
+                    lambda X, m=model: np.sqrt(m.predict(X)[1])
+                )
+                fit_slices.append(np.asarray(mean))
+                uncertainty_slices.append(np.asarray(std))
 
             self.parameter_slices.append(ParameterSpaceSlice())
 
             archive_prefix = f'data.parameter_slices[{parameter_counter}]'
             for dataset, data in (
-                ('fit', np.array(mu_all_slices)),
-                ('uncertainty', np.sqrt(np.array(var_all_slices))),
+                ('fit', np.array(fit_slices)),
+                ('uncertainty', np.array(uncertainty_slices)),
                 ('iteration', iteration_procedure),
                 ('parameters_x', np.array(compute_parameters(main_rank))),
                 ('parameters_y', np.array(compute_parameters(upper_rank))),
