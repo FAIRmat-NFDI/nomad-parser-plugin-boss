@@ -297,6 +297,39 @@ def test_eln_edit_permutation_preserves_data(upload_dir, synthetic_pes, monkeypa
     assert after == before  # each slice kept its own data through the cycle
 
 
+def test_rename_leaves_missing_group_reference_untouched(
+    upload_dir, synthetic_pes, monkeypatch
+):
+    """
+    If a slice's referenced group is absent from the auxiliary file, the rename
+    must not point that reference at a destination it never created: the move is
+    skipped and the reference is left as-is (with a warning).
+    """
+    archive = parse(str(upload_dir / 'test.archive.yaml'))[0]  # names x, y
+    normalize_all(archive)
+
+    # drop the group from the file, leaving the archive reference dangling
+    with h5py.File(upload_dir / 'boss.h5', 'r+') as h5file:
+        del h5file['x_vs_y']
+
+    edited = archive.data.m_to_dict(with_root_def=True)
+    edited['parameter_names'] = ['alpha', 'beta']
+    edited_file = upload_dir / 'boss.archive.json'
+    edited_file.write_text(json.dumps({'data': edited}))
+
+    def fail_compute(self, archive, logger):
+        pytest.fail('The expensive BOSS compute must not run on an ELN edit')
+
+    monkeypatch.setattr(ELNBOSSAnalysis, '_compute_pes', fail_compute)
+
+    edited_archive = parse(str(edited_file))[0]
+    normalize_all(edited_archive)
+
+    # the reference was not rewritten to the non-existent /alpha_vs_beta group
+    fit_reference = edited_archive.data.parameter_slices[0].fit
+    assert fit_reference.rsplit('#', 1)[-1] == '/x_vs_y/fit'
+
+
 def test_recompute_clears_stale_groups(upload_dir, synthetic_pes):
     """
     A recomputation over an existing .h5 (e.g. after the analysis entry lost

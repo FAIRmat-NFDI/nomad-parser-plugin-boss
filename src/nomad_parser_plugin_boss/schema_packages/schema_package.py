@@ -244,7 +244,9 @@ class PotentialEnergySurfaceFit(Schema):
             )
             return
 
-        self._rename_slice_groups(archive, slice_group_names(self.parameter_names))
+        self._rename_slice_groups(
+            archive, slice_group_names(self.parameter_names), logger
+        )
 
         handler = HDF5Handler(
             filename=self.auxiliary_file, archive=archive, logger=logger
@@ -254,17 +256,19 @@ class PotentialEnergySurfaceFit(Schema):
         handler.write_file()
 
     def _rename_slice_groups(
-        self, archive: 'EntryArchive', group_names: list[str]
+        self, archive: 'EntryArchive', group_names: list[str], logger: 'BoundLogger'
     ) -> None:
         """
         Rename the HDF5 slice groups to `group_names` and rewrite the affected
         `HDF5Reference` values. The rename is a metadata-only `h5py` move (no
         data copy); groups whose name is already correct are left untouched.
+        References are only rewritten for groups that are actually moved, so a
+        source group missing from the file cannot leave a reference dangling.
         """
         import h5py
 
-        renames: dict[str, str] = {}
-        reference_updates: list[tuple[ParameterSpaceSlice, str, str]] = []
+        # Plan the renames: current group -> (new group, its reference updates)
+        plans: dict[str, tuple[str, list[tuple[ParameterSpaceSlice, str, str]]]] = {}
         for group_name, parameter_slice in zip(group_names, self.parameter_slices):
             reference = parameter_slice.fit
             if not reference or '#' not in reference:
@@ -273,38 +277,53 @@ class PotentialEnergySurfaceFit(Schema):
             new_group = f'/{group_name}'
             if current_group == new_group:
                 continue
-            renames[current_group] = new_group
+            updates = []
             for dataset in SLICE_DATASETS:
                 dataset_reference = getattr(parameter_slice, dataset)
                 if dataset_reference and '#' in dataset_reference:
                     prefix = dataset_reference.split('#', 1)[0]
-                    reference_updates.append(
+                    updates.append(
                         (parameter_slice, dataset, f'{prefix}#{new_group}/{dataset}')
                     )
+            plans[current_group] = (new_group, updates)
 
-        if not renames:
+        if not plans:
             return
 
         # Resolve the on-disk path; only `.name` is used, so open mode is moot
         with archive.m_context.raw_file(self.auxiliary_file) as file_handle:
             h5_path = file_handle.name
+
+        applied_updates: list[tuple[ParameterSpaceSlice, str, str]] = []
         with h5py.File(h5_path, 'r+') as h5:
             # Two-phase move: park every source under a unique temporary name,
             # then move each temporary to its destination. A direct old->new
             # move would skip any rename whose destination is still occupied by
             # another group, silently corrupting permutation/cyclic renames
             # (e.g. /a_vs_b and /a_vs_c swapping).
-            parked: list[tuple[str, str]] = []
-            for index, (old_group, new_group) in enumerate(renames.items()):
-                old_key = old_group.lstrip('/')
-                if old_key in h5:
-                    temporary_key = f'__rename_tmp_{index}__'
-                    h5.move(old_key, temporary_key)
-                    parked.append((temporary_key, new_group.lstrip('/')))
-            for temporary_key, new_key in parked:
+            parked: list[tuple[str, str, list[tuple[ParameterSpaceSlice, str, str]]]]
+            parked = []
+            for index, (current_group, (new_group, updates)) in enumerate(
+                plans.items()
+            ):
+                old_key = current_group.lstrip('/')
+                if old_key not in h5:
+                    logger.warning(
+                        'Slice group missing from the auxiliary file; leaving '
+                        'its references unchanged.',
+                        group=current_group,
+                        file=self.auxiliary_file,
+                    )
+                    continue
+                temporary_key = f'__rename_tmp_{index}__'
+                h5.move(old_key, temporary_key)
+                parked.append((temporary_key, new_group.lstrip('/'), updates))
+            for temporary_key, new_key, updates in parked:
                 h5.move(temporary_key, new_key)
+                applied_updates.extend(updates)
 
-        for parameter_slice, dataset, new_reference in reference_updates:
+        # Only rewrite references for groups whose data was actually moved
+        for parameter_slice, dataset, new_reference in applied_updates:
             setattr(parameter_slice, dataset, new_reference)
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
