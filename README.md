@@ -30,7 +30,7 @@ analysis entry persists and user edits win. See
 
 **Temporary Workaround**: This plugin requires `aalto-boss>=1.12.0`, which depends on `GPy>=1.13.1`. GPy has a hard constraint of `scipy<=1.12.0`, which conflicts with newer versions of `pymatgen` (>=2025.10.7) that require `scipy>=1.13.0`.
 
-**Current solution**: We've constrained `pymatgen<2025.10.7` in `nomad-FAIR/pyproject.toml` to maintain compatibility. This constraint should be removed once GPy updates to support `scipy>=1.13.0`.
+**Current solution**: In deployments that also install `pymatgen` (e.g. a NOMAD distribution), constrain `pymatgen<2025.10.7` in that downstream project's dependencies to maintain compatibility. This constraint lives outside this repository and should be removed once GPy updates to support `scipy>=1.13.0`.
 
 **Tracking**:
 - GPy issue: https://github.com/SheffieldML/GPy/issues (scipy compatibility)

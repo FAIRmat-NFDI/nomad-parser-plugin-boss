@@ -16,10 +16,25 @@ from nomad_parser_plugin_boss.schema_packages.schema_package import (
     h5web_attribute_map,
 )
 
-structlogging.ConsoleFormatter.short_format = True
-setattr(logging, 'Formatter', structlogging.ConsoleFormatter)
-
 DATA_DIR = Path(__file__).parent / 'data'
+
+
+@pytest.fixture(autouse=True, scope='session')
+def _short_log_format():
+    """
+    Render nomad's structlog output in short form during the test session,
+    restoring the global logging state on teardown so the patch cannot leak
+    into other suites and make test ordering matter.
+    """
+    original_formatter = logging.Formatter
+    original_short_format = structlogging.ConsoleFormatter.short_format
+    structlogging.ConsoleFormatter.short_format = True
+    logging.Formatter = structlogging.ConsoleFormatter
+    try:
+        yield
+    finally:
+        logging.Formatter = original_formatter
+        structlogging.ConsoleFormatter.short_format = original_short_format
 
 
 @pytest.fixture(name='caplog', scope='function')

@@ -404,7 +404,7 @@ class RawFileBOSSData(EntryData):
     measurement = Quantity(
         type=ELNBOSSAnalysis,
         a_eln=ELNAnnotation(
-            component='ReferenceEditQuantity',
+            component=ELNComponentEnum.ReferenceEditQuantity,
         ),
     )
 
