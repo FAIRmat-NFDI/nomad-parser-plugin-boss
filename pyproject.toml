@@ -30,6 +30,10 @@ dependencies = [
     "python-magic-bin; sys_platform == 'win32'",
     "aalto-boss>=1.15.1",
     "PyYAML",
+    # Generic Bayesian-optimization schema that ELNBOSSAnalysis inherits from.
+    # Not yet on PyPI — install from source until published:
+    #   git+https://github.com/FAIRmat-NFDI/nomad-bayesian-optimization
+    "nomad-bayesian-optimization",
 ]
 
 [project.urls]
