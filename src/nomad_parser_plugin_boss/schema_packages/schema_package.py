@@ -126,6 +126,15 @@ class ParameterSpaceSlice(ArchiveSection):
         ),
     )
 
+    name = Quantity(
+        type=str,
+        description="""
+        Label of the compared-parameter slice, e.g. `alpha_vs_beta`, matching the
+        H5Web group name. Used as the subsection label so the archive tree shows
+        the parameter combination instead of the list index.
+        """,
+    )
+
     fit = Quantity(
         type=HDF5Reference,
         unit='eV',
@@ -173,7 +182,11 @@ class PotentialEnergySurfaceFit(Schema):
         a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
     )
 
-    parameter_slices = SubSection(sub_section=ParameterSpaceSlice.m_def, repeats=True)
+    # `label_quantity='name'` tells the GUI to label each repeating slice by its
+    # `name` (e.g. `alpha_vs_beta`) instead of the list index.
+    parameter_slices = SubSection(
+        sub_section=ParameterSpaceSlice.m_def, repeats=True, label_quantity='name'
+    )
 
     # Optional per-upload configuration file, read from the data file's
     # directory. Kept generic so future options can be added without renaming.
@@ -244,9 +257,13 @@ class PotentialEnergySurfaceFit(Schema):
             )
             return
 
-        self._rename_slice_groups(
-            archive, slice_group_names(self.parameter_names), logger
-        )
+        group_names = slice_group_names(self.parameter_names)
+        self._rename_slice_groups(archive, group_names, logger)
+        # Keep the subsection label in step with the (possibly renamed) groups so
+        # the archive tree shows `alpha_vs_beta` rather than the list index. Also
+        # backfills the name on entries computed before this field existed.
+        for parameter_slice, group_name in zip(self.parameter_slices, group_names):
+            parameter_slice.name = group_name
 
         handler = HDF5Handler(
             filename=self.auxiliary_file, archive=archive, logger=logger
@@ -468,7 +485,7 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
                 fit_slices.append(np.asarray(mean))
                 uncertainty_slices.append(np.sqrt(np.asarray(variance)))
 
-            self.parameter_slices.append(ParameterSpaceSlice())
+            self.parameter_slices.append(ParameterSpaceSlice(name=group))
 
             archive_prefix = f'data.parameter_slices[{parameter_counter}]'
             for dataset, data in (
