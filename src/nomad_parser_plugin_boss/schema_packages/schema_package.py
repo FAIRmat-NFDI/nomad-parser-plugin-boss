@@ -14,6 +14,7 @@ from nomad.datamodel.metainfo.annotations import (
     SectionProperties,
 )
 from nomad.datamodel.metainfo.plot import PlotlyFigure
+from nomad.datamodel.metainfo.workflow import Link, Task, Workflow
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
 from nomad_bayesian_optimization.naming import sanitize_quantity_name
 from nomad_bayesian_optimization.schema_packages.bayesian_optimization import (
@@ -327,6 +328,156 @@ def build_campaign_steps(archive, parameter_names: list[str], locations, values)
     return steps
 
 
+class Evaluation(ArchiveSection):
+    """One black-box objective evaluation of a BOSS run: the recommended parameter
+    point BOSS acquired and the energy observed there. Serves as the shared
+    input/output anchor for the workflow-graph chain (a task's output and the next
+    task's input reference the same ``Evaluation`` instance, which is what draws the
+    edge)."""
+
+    m_def = Section(label='Evaluation')
+
+    name = Quantity(type=str)
+
+    iteration = Quantity(
+        type=int,
+        description="""
+        BOSS iteration this evaluation belongs to. The initial batch shares
+        iteration 0, so several evaluations may carry the same value.
+        """,
+    )
+    batch_index = Quantity(
+        type=int,
+        description='0-based position of this evaluation within its iteration batch.',
+    )
+    location = Quantity(
+        type=np.float64,
+        shape=['*'],
+        description='Recommended parameter point (one column per parameter).',
+    )
+    energy = Quantity(
+        type=np.float64,
+        unit='eV',
+        description='Objective value observed at this point.',
+    )
+    # Forward-compatible seam: None for a black-box BOSS run. In an online
+    # recommend -> compute -> feedback loop this can later reference the external
+    # computation entry that produced `energy`, without changing graph topology.
+    computation = Quantity(
+        type=ArchiveSection,
+        description="""
+        Reference to the external computation entry that produced this evaluation.
+        Unset for a retrospective black-box BOSS run.
+        """,
+    )
+
+
+class PredictedMinimum(ArchiveSection):
+    """Terminal node of the workflow chain: BOSS' predicted global minimum at the
+    final iteration."""
+
+    m_def = Section(label='Predicted Global Minimum')
+
+    name = Quantity(type=str)
+    iteration = Quantity(type=int)
+    location = Quantity(type=np.float64, shape=['*'])
+    energy = Quantity(type=np.float64, unit='eV')
+    uncertainty = Quantity(type=np.float64, unit='eV')
+
+
+def build_workflow(evaluations, predicted_min):
+    """Build the serial provenance chain ``eval_1 -> ... -> eval_N -> predicted
+    minimum`` as a NOMAD ``Workflow``.
+
+    Edges are drawn by *shared section identity*: task ``k``'s output ``Link`` and
+    task ``k+1``'s input ``Link`` reference the same ``Evaluation`` instance, so the
+    GUI graph connects them. The final task outputs the ``PredictedMinimum``, which
+    is also the workflow output.
+    """
+    tasks = []
+    for k, evaluation in enumerate(evaluations):
+        inputs = []
+        if k > 0:
+            previous = evaluations[k - 1]
+            inputs.append(Link(name=previous.name, section=previous))
+        tasks.append(
+            Task(
+                name=evaluation.name,
+                inputs=inputs,
+                outputs=[Link(name=evaluation.name, section=evaluation)],
+            )
+        )
+
+    if evaluations and predicted_min is not None:
+        tasks.append(
+            Task(
+                name='predicted global minimum',
+                inputs=[Link(name=evaluations[-1].name, section=evaluations[-1])],
+                outputs=[Link(name='predicted global minimum', section=predicted_min)],
+            )
+        )
+
+    workflow = Workflow(name='BOSS Bayesian optimization', tasks=tasks)
+    if evaluations:
+        workflow.inputs = [Link(name=evaluations[0].name, section=evaluations[0])]
+    if predicted_min is not None:
+        workflow.outputs = [
+            Link(name='predicted global minimum', section=predicted_min)
+        ]
+    elif evaluations:
+        workflow.outputs = [
+            Link(name=evaluations[-1].name, section=evaluations[-1])
+        ]
+    return workflow
+
+
+def _as_float(value) -> float:
+    """Cast a possibly-pint quantity to a plain float."""
+    return float(getattr(value, 'magnitude', value))
+
+
+def build_evaluations(acquisitions):
+    """Turn the acquisition history into workflow-graph nodes: one ``Evaluation``
+    per acquired point (carrying its iteration and batch position) and the terminal
+    ``PredictedMinimum`` (latest iteration). Returns ``(evaluations, predicted_min)``.
+    """
+    iterations = [int(i) for i in acquisitions.acquisition_iteration]
+    batch_counts: dict[int, int] = {}
+    evaluations = []
+    for index, (location, value, iteration) in enumerate(
+        zip(
+            acquisitions.acquired_location,
+            acquisitions.acquired_value,
+            iterations,
+        )
+    ):
+        batch_index = batch_counts.get(iteration, 0)
+        batch_counts[iteration] = batch_index + 1
+        evaluations.append(
+            Evaluation(
+                name=f'eval_{index:02d} (iter {iteration})',
+                iteration=iteration,
+                batch_index=batch_index,
+                location=np.asarray(location, dtype=float),
+                energy=_as_float(value),
+            )
+        )
+
+    predicted_min = None
+    if len(acquisitions.predicted_minimum):
+        last = int(np.argmax(acquisitions.iteration))
+        predicted_min = PredictedMinimum(
+            name='predicted global minimum',
+            iteration=int(acquisitions.iteration[last]),
+            location=np.asarray(
+                acquisitions.predicted_minimum_location[last], dtype=float
+            ),
+            energy=_as_float(acquisitions.predicted_minimum[last]),
+            uncertainty=_as_float(acquisitions.predicted_minimum_uncertainty[last]),
+        )
+    return evaluations, predicted_min
+
+
 class PotentialEnergySurfaceFit(Schema):
     data_file = Quantity(
         type=str,
@@ -355,6 +506,13 @@ class PotentialEnergySurfaceFit(Schema):
 
     acquisitions = SubSection(sub_section=Acquisitions.m_def)
     hyperparameters = SubSection(sub_section=Hyperparameters.m_def)
+
+    # Workflow-graph nodes: one Evaluation per acquired point, plus the terminal
+    # predicted global minimum. `label_quantity='name'` labels each node.
+    evaluations = SubSection(
+        sub_section=Evaluation.m_def, repeats=True, label_quantity='name'
+    )
+    predicted_global_minimum = SubSection(sub_section=PredictedMinimum.m_def)
 
     # Optional per-upload configuration file, read from the data file's
     # directory. Kept generic so future options can be added without renaming.
@@ -777,12 +935,23 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
             if figure is not None:
                 self.figures = list(self.figures or []) + [figure]
 
+        # Surface the run as a workflow graph: a serial chain of objective
+        # evaluations ending in the predicted global minimum. Runs on every
+        # normalization (evaluations are present whether just computed or reloaded
+        # from the archive on an ELN edit). Direct assignment mounts it under the
+        # archive root so normalize_all recurses into Workflow/Link normalization.
+        if self.evaluations:
+            archive.workflow2 = build_workflow(
+                self.evaluations, self.predicted_global_minimum
+            )
+
     def _populate_bo_records(
         self, archive: 'EntryArchive', res, logger: 'BoundLogger'
     ) -> None:
         """From the BOSS results, populate the acquisition history, the GP kernel
-        hyperparameters and the measured ``steps`` (which light up the inherited
-        BayesianOptimization counters, step table and progress figure)."""
+        hyperparameters, the measured ``steps`` (inherited BO counters/table/
+        progress figure) and the workflow-graph nodes (``evaluations`` +
+        ``predicted_global_minimum``)."""
         self.acquisitions = extract_acquisitions(res, logger)
         self.hyperparameters = extract_hyperparameters(res, logger)
         if self.acquisitions is None:
@@ -792,6 +961,9 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
             list(self.parameter_names),
             np.asarray(res['X']),
             np.asarray(res['Y'])[:, 0],
+        )
+        self.evaluations, self.predicted_global_minimum = build_evaluations(
+            self.acquisitions
         )
 
     def _compute_pes(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
@@ -864,7 +1036,8 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
 
         iteration_procedure = np.arange(iter_no, 0, -1)
 
-        # Acquisition history, GP hyperparameters and measured steps.
+        # Acquisition history, GP hyperparameters, measured steps and
+        # workflow-graph nodes.
         self._populate_bo_records(archive, res, logger)
 
         group_names = slice_group_names(self.parameter_names)

@@ -502,3 +502,50 @@ def test_hyperparameters_figure(upload_dir):
     assert lengthscales.shape == (len(hyper.iteration), len(data.parameter_names))
     labels = [getattr(figure, 'label', None) for figure in (data.figures or [])]
     assert 'hyperparameters' in labels
+
+
+def test_workflow_graph(upload_dir):
+    """The BOSS run is surfaced as a serial workflow: one task per evaluation,
+    chained by shared section identity, ending in the predicted global minimum."""
+    archive = parse(str(upload_dir / 'test.archive.yaml'))[0]
+    normalize_all(archive)
+    data = archive.data
+
+    workflow = archive.workflow2
+    assert workflow is not None
+
+    n_eval = len(data.acquisitions.acquired_value)
+    assert len(data.evaluations) == n_eval
+    # one task per evaluation + one terminal predicted-minimum task
+    assert len(workflow.tasks) == n_eval + 1
+
+    # chain connectivity: task k input == task k-1 output == evaluations[k-1]
+    for k in range(1, n_eval):
+        assert workflow.tasks[k].inputs[0].section is data.evaluations[k - 1]
+        assert workflow.tasks[k - 1].outputs[0].section is data.evaluations[k - 1]
+    assert list(workflow.tasks[0].inputs) == []  # head task has no input
+    # terminal task links the last evaluation to the predicted global minimum
+    assert workflow.tasks[-1].inputs[0].section is data.evaluations[-1]
+    assert workflow.tasks[-1].outputs[0].section is data.predicted_global_minimum
+
+    # workflow boundary
+    assert workflow.inputs[0].section is data.evaluations[0]
+    assert workflow.outputs[0].section is data.predicted_global_minimum
+
+    # batch awareness: the initial batch (iteration 0) holds several evaluations
+    iter0 = [ev for ev in data.evaluations if ev.iteration == 0]
+    assert len(iter0) > 1
+    assert [ev.batch_index for ev in iter0] == list(range(len(iter0)))
+    assert 'iter 0' in workflow.tasks[0].name
+
+    # forward-compatible seam: unset for a black-box BOSS run
+    assert all(ev.computation is None for ev in data.evaluations)
+
+
+def test_no_workflow_without_acquisitions(upload_dir, synthetic_pes):
+    """The synthetic (BOSS-free) path sets no acquisitions, so no workflow is
+    built — locks the guard without needing the real BOSS compute."""
+    archive = parse(str(upload_dir / 'test.archive.yaml'))[0]
+    normalize_all(archive)
+    assert not archive.data.evaluations
+    assert archive.workflow2 is None
