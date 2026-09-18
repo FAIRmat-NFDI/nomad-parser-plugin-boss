@@ -249,6 +249,49 @@ def extract_acquisitions(res, logger: 'BoundLogger') -> 'Acquisitions | None':
         return None
 
 
+class Hyperparameters(ArchiveSection):
+    """BOSS GP kernel hyperparameters tracked per iteration, mirroring BOSS'
+    ``plot_hyperparameters``: the kernel variance and the per-dimension
+    lengthscales as the surrogate is refit."""
+
+    iteration = Quantity(type=int, shape=['*'])
+    kernel_variance = Quantity(
+        type=np.float64,
+        shape=['*'],
+        description="""
+        Signal variance of the GP kernel per iteration. This is a first sanity
+        check on the model: it sets the range of the surrogate's output.
+        """,
+    )
+    lengthscales = Quantity(
+        type=np.float64,
+        shape=['*', '*'],
+        description="""
+        Kernel lengthscale per iteration and parameter (row: iteration, column:
+        parameter). A lengthscale is inversely related to the sensitivity of the
+        objective to that parameter.
+        """,
+    )
+
+
+def extract_hyperparameters(res, logger: 'BoundLogger') -> 'Hyperparameters | None':
+    """Read the GP kernel hyperparameters per iteration off ``BOResults`` — the
+    data behind BOSS' ``plot_hyperparameters``. ``model_params`` stores one row
+    per iteration: ``[variance, lengthscale_1, ..., lengthscale_dim]``. Returns
+    ``None`` if the results cannot be read."""
+    try:
+        model_params = res['model_params']
+        params = model_params.to_array(gaps=False)
+        return Hyperparameters(
+            iteration=np.asarray(list(model_params.keys()), dtype=int),
+            kernel_variance=params[:, 0],
+            lengthscales=params[:, 1:],
+        )
+    except Exception as e:
+        logger.warning('Could not extract BOSS hyperparameters.', error=str(e))
+        return None
+
+
 def build_campaign_steps(archive, parameter_names: list[str], locations, values):
     """Record each acquired point as a measured ``Step``.
 
@@ -311,6 +354,7 @@ class PotentialEnergySurfaceFit(Schema):
     )
 
     acquisitions = SubSection(sub_section=Acquisitions.m_def)
+    hyperparameters = SubSection(sub_section=Hyperparameters.m_def)
 
     # Optional per-upload configuration file, read from the data file's
     # directory. Kept generic so future options can be added without renaming.
@@ -590,6 +634,65 @@ class PotentialEnergySurfaceFit(Schema):
         )
         return PlotlyFigure(label='acquisitions', figure=figure.to_plotly_json())
 
+    def _hyperparameters_figure(self):
+        """GP kernel hyperparameters vs iteration as a two-panel Plotly figure,
+        in the same style as the acquisitions figure. Top: kernel variance.
+        Bottom: per-parameter lengthscales (labelled by parameter name)."""
+        hyper = self.hyperparameters
+        if (
+            hyper is None
+            or hyper.kernel_variance is None
+            or len(hyper.kernel_variance) == 0
+        ):
+            return None
+
+        iters = [int(i) for i in hyper.iteration]
+        variance = [float(v) for v in hyper.kernel_variance]
+        lengthscales = np.asarray(hyper.lengthscales, dtype=float)
+        names = list(self.parameter_names or [])
+
+        figure = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.18
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=iters, y=variance, mode='lines+markers', name='Kernel variance σ²'
+            ),
+            row=1,
+            col=1,
+        )
+        n_dims = lengthscales.shape[1] if lengthscales.ndim > 1 else 0
+        for i in range(n_dims):
+            label = names[i] if i < len(names) else f'parameter_{i}'
+            color = DEFAULT_PLOTLY_COLORS[i % len(DEFAULT_PLOTLY_COLORS)]
+            figure.add_trace(
+                go.Scatter(
+                    x=iters,
+                    y=list(lengthscales[:, i]),
+                    mode='lines+markers',
+                    line=dict(color=color),
+                    name=f'{label} lengthscale',
+                ),
+                row=2,
+                col=1,
+            )
+
+        figure.update_xaxes(tickformat='d', title_text='Iteration', row=2, col=1)
+        figure.update_yaxes(title_text='Kernel variance σ²', row=1, col=1)
+        figure.update_yaxes(title_text='Lengthscale ℓ', row=2, col=1)
+        figure.update_traces(legend='legend', row=1, col=1)
+        figure.update_traces(legend='legend2', row=2, col=1)
+        figure.update_layout(
+            template='plotly_white',
+            height=800,
+            showlegend=True,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, x=0),
+            legend2=dict(orientation='h', yanchor='bottom', y=0.44, x=0),
+        )
+        return PlotlyFigure(
+            label='hyperparameters', figure=figure.to_plotly_json()
+        )
+
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
         super().normalize(archive, logger)
         self.refresh_h5web_labels(archive, logger)
@@ -663,11 +766,33 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
 
         super().normalize(archive, logger)
 
-        # Append the acquisitions figure after BayesianOptimization.normalize rebuilds
-        # self.figures from the (currently empty) steps, so it is not clobbered.
-        figure = self._acquisitions_figure()
-        if figure is not None:
-            self.figures = list(self.figures or []) + [figure]
+        # Append the BOSS diagnostic figures after BayesianOptimization.normalize
+        # rebuilds self.figures from the (currently empty) steps, so they are not
+        # clobbered.
+        extra_figures = [
+            self._acquisitions_figure(),
+            self._hyperparameters_figure(),
+        ]
+        for figure in extra_figures:
+            if figure is not None:
+                self.figures = list(self.figures or []) + [figure]
+
+    def _populate_bo_records(
+        self, archive: 'EntryArchive', res, logger: 'BoundLogger'
+    ) -> None:
+        """From the BOSS results, populate the acquisition history, the GP kernel
+        hyperparameters and the measured ``steps`` (which light up the inherited
+        BayesianOptimization counters, step table and progress figure)."""
+        self.acquisitions = extract_acquisitions(res, logger)
+        self.hyperparameters = extract_hyperparameters(res, logger)
+        if self.acquisitions is None:
+            return
+        self.steps = build_campaign_steps(
+            archive,
+            list(self.parameter_names),
+            np.asarray(res['X']),
+            np.asarray(res['Y'])[:, 0],
+        )
 
     def _compute_pes(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         """
@@ -739,18 +864,8 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
 
         iteration_procedure = np.arange(iter_no, 0, -1)
 
-        # Acquisition history (sampled points + predicted global minimum per
-        # iteration); drives the two-panel Acquisitions figure.
-        self.acquisitions = extract_acquisitions(res, logger)
-        # Record each acquired point as a measured Step so the inherited
-        # BayesianOptimization counters, step table and progress figure populate.
-        if self.acquisitions is not None:
-            self.steps = build_campaign_steps(
-                archive,
-                list(self.parameter_names),
-                np.asarray(res['X']),
-                np.asarray(res['Y'])[:, 0],
-            )
+        # Acquisition history, GP hyperparameters and measured steps.
+        self._populate_bo_records(archive, res, logger)
 
         group_names = slice_group_names(self.parameter_names)
         for parameter_counter, rank in enumerate(generate_slices(len(bounds))):
