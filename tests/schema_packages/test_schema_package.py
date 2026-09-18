@@ -460,3 +460,15 @@ def test_real_boss_compute(upload_dir, assert_h5web_group):
             title='x vs y',
             long_names={'parameters_x': 'x', 'parameters_y': 'y'},
         )
+
+
+def test_convergence_figure(upload_dir):
+    """The entry exposes BOSS convergence data and a matching progress-style figure."""
+    archive = parse(str(upload_dir / 'test.archive.yaml'))[0]
+    normalize_all(archive)
+    data = archive.data
+    assert data.convergence is not None
+    assert len(data.convergence.predicted_minimum) > 0
+    assert len(data.convergence.iteration) == len(data.convergence.predicted_minimum)
+    labels = [getattr(figure, 'label', None) for figure in (data.figures or [])]
+    assert 'Convergence' in labels

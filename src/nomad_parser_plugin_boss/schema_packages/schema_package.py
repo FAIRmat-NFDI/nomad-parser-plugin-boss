@@ -4,6 +4,7 @@ from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 import numpy as np
+import plotly.graph_objects as go
 from nomad.datamodel.data import ArchiveSection, EntryData, Schema
 from nomad.datamodel.hdf5 import HDF5Reference
 from nomad.datamodel.metainfo.annotations import (
@@ -12,6 +13,7 @@ from nomad.datamodel.metainfo.annotations import (
     H5WebAnnotation,
     SectionProperties,
 )
+from nomad.datamodel.metainfo.plot import PlotlyFigure
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
 from nomad_bayesian_optimization.schema_packages.bayesian_optimization import (
     BayesianOptimization,
@@ -167,6 +169,24 @@ class ParameterSpaceSlice(ArchiveSection):
     )
 
 
+class Convergence(ArchiveSection):
+    """BOSS convergence diagnostic: predicted global-minimum energy per iteration."""
+
+    iteration = Quantity(type=int, shape=['*'])
+    predicted_minimum = Quantity(
+        type=np.float64,
+        unit='eV',
+        shape=['*'],
+        description='Predicted global-minimum energy per iteration.',
+    )
+    predicted_minimum_uncertainty = Quantity(
+        type=np.float64,
+        unit='eV',
+        shape=['*'],
+        description='Std. dev. of the predicted global minimum (sqrt of its GP variance).',
+    )
+
+
 class PotentialEnergySurfaceFit(Schema):
     data_file = Quantity(
         type=str,
@@ -192,6 +212,8 @@ class PotentialEnergySurfaceFit(Schema):
     parameter_slices = SubSection(
         sub_section=ParameterSpaceSlice.m_def, repeats=True, label_quantity='name'
     )
+
+    convergence = SubSection(sub_section=Convergence.m_def)
 
     # Optional per-upload configuration file, read from the data file's
     # directory. Kept generic so future options can be added without renaming.
@@ -348,6 +370,58 @@ class PotentialEnergySurfaceFit(Schema):
         for parameter_slice, dataset, new_reference in applied_updates:
             setattr(parameter_slice, dataset, new_reference)
 
+    def _convergence_figure(self):
+        """Predicted global-minimum energy vs iteration, drawn in the same style as
+        the nomad-bayesian-optimization progress plots (a PlotlyFigure on `figures`)."""
+        conv = self.convergence
+        if conv is None or conv.predicted_minimum is None or len(conv.predicted_minimum) == 0:
+            return None
+        iters = [int(i) for i in conv.iteration]
+        energy = [float(getattr(v, 'magnitude', v)) for v in conv.predicted_minimum]
+        unc = (
+            [float(getattr(v, 'magnitude', v)) for v in conv.predicted_minimum_uncertainty]
+            if conv.predicted_minimum_uncertainty is not None
+            else [0.0] * len(energy)
+        )
+        best, run = [], None
+        for e in energy:
+            run = e if run is None else min(run, e)
+            best.append(run)
+        upper = [e + u for e, u in zip(energy, unc)]
+        lower = [e - u for e, u in zip(energy, unc)]
+        figure = go.Figure(
+            data=[
+                go.Scatter(
+                    x=iters + iters[::-1],
+                    y=upper + lower[::-1],
+                    fill='toself',
+                    fillcolor='rgba(31,119,180,0.15)',
+                    line=dict(color='rgba(0,0,0,0)'),
+                    hoverinfo='skip',
+                    showlegend=False,
+                    name='Uncertainty',
+                ),
+                go.Scatter(x=iters, y=energy, mode='lines+markers', name='Predicted minimum'),
+                go.Scatter(
+                    x=iters,
+                    y=best,
+                    mode='lines',
+                    line_shape='hv',
+                    line_dash='dash',
+                    name='Best so far',
+                ),
+            ]
+        )
+        figure.update_layout(
+            template='plotly_white',
+            xaxis_title='Iteration',
+            xaxis_tickformat='d',
+            yaxis_title='Predicted minimum energy (eV)',
+            showlegend=True,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, x=0),
+        )
+        return PlotlyFigure(label='Convergence', figure=figure.to_plotly_json())
+
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
         super().normalize(archive, logger)
         self.refresh_h5web_labels(archive, logger)
@@ -421,6 +495,12 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
 
         super().normalize(archive, logger)
 
+        # Append the convergence figure after BayesianOptimization.normalize rebuilds
+        # self.figures from the (currently empty) steps, so it is not clobbered.
+        figure = self._convergence_figure()
+        if figure is not None:
+            self.figures = list(self.figures or []) + [figure]
+
     def _compute_pes(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         """
         Parse the BOSS data file, reconstruct the PES fit and uncertainty on all
@@ -490,6 +570,31 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
         handler = HDF5Handler(filename=h5_filename, archive=archive, logger=logger)
 
         iteration_procedure = np.arange(iter_no, 0, -1)
+
+        # Convergence diagnostic: predicted global-minimum energy per iteration.
+        # Cheap — reuse the value stored during the run, else evaluate the model at
+        # the predicted-minimum location (the same reconstruction used for the slices).
+        conv_iter, conv_energy, conv_unc = [], [], []
+        for itr in range(1, iter_no + 1):
+            try:
+                if not res['mu_glmin'].is_default(itr):
+                    mu = float(res.select('mu_glmin', itr))
+                    nu = float(res.select('nu_glmin', itr))
+                else:
+                    x_glmin = np.atleast_2d(res.select('x_glmin', itr))
+                    mean, variance = res.reconstruct_model(itr).predict(x_glmin)
+                    mu, nu = float(mean[0, 0]), float(variance[0, 0])
+            except Exception:
+                continue
+            conv_iter.append(itr)
+            conv_energy.append(mu)
+            conv_unc.append(float(np.sqrt(max(nu, 0.0))))
+        if conv_iter:
+            self.convergence = Convergence(
+                iteration=np.array(conv_iter),
+                predicted_minimum=np.array(conv_energy),
+                predicted_minimum_uncertainty=np.array(conv_unc),
+            )
 
         group_names = slice_group_names(self.parameter_names)
         for parameter_counter, rank in enumerate(generate_slices(len(bounds))):
