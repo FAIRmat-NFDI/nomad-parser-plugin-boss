@@ -14,7 +14,7 @@ from nomad.datamodel.metainfo.annotations import (
     SectionProperties,
 )
 from nomad.datamodel.metainfo.plot import PlotlyFigure
-from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
+from nomad.metainfo import MEnum, Quantity, SchemaPackage, Section, SubSection
 from nomad_bayesian_optimization.naming import sanitize_quantity_name
 from nomad_bayesian_optimization.schema_packages.bayesian_optimization import (
     BayesianOptimization,
@@ -327,6 +327,75 @@ def build_campaign_steps(archive, parameter_names: list[str], locations, values)
     return steps
 
 
+class GeometricParameter(ContinuousParameter):
+    """A continuous BOSS parameter that is a molecular internal coordinate — a
+    bond, angle or dihedral defined by atom indices into ``structure_file``.
+
+    Extends the inherited ``ContinuousParameter`` (name + bounds) with the
+    geometric meaning of the coordinate, so a structure viewer (e.g. NGL) can
+    highlight exactly which atoms the optimized parameter moves.
+    """
+
+    m_def = Section(label='Geometric Parameter')
+
+    coordinate_type = Quantity(
+        type=MEnum('bond', 'angle', 'dihedral'),
+        description='Kind of internal coordinate this parameter represents.',
+    )
+    atom_indices = Quantity(
+        type=int,
+        shape=['*'],
+        description="""
+        0-based atom indices into ``structure_file`` defining the coordinate:
+        2 for a bond, 3 for an angle, 4 for a dihedral.
+        """,
+    )
+
+
+# Number of atoms that define each internal-coordinate type.
+ATOMS_PER_COORDINATE = {'bond': 2, 'angle': 3, 'dihedral': 4}
+
+
+def parse_internal_coordinates(spec, logger: 'BoundLogger') -> dict:
+    """Validate the optional ``internal_coordinates`` config entry.
+
+    Expects a list of ``{name, type, atoms}`` mappings, where ``type`` is one of
+    ``bond``/``angle``/``dihedral`` and ``atoms`` holds the matching number of
+    integer atom indices. Returns ``{name: (coordinate_type, atom_indices)}`` for
+    the valid entries; malformed entries are skipped with a warning.
+    """
+    result: dict = {}
+    if spec is None:
+        return result
+    if not isinstance(spec, list):
+        logger.warning('Invalid `internal_coordinates`: expected a list.')
+        return result
+    for entry in spec:
+        name = entry.get('name') if isinstance(entry, dict) else None
+        coordinate_type = entry.get('type') if isinstance(entry, dict) else None
+        atoms = entry.get('atoms') if isinstance(entry, dict) else None
+        expected = ATOMS_PER_COORDINATE.get(coordinate_type)
+        if (
+            not isinstance(name, str)
+            or expected is None
+            or not isinstance(atoms, list)
+            or not all(isinstance(atom, int) for atom in atoms)
+        ):
+            logger.warning('Skipping invalid internal_coordinate entry.', entry=entry)
+            continue
+        if len(atoms) != expected:
+            logger.warning(
+                'Internal coordinate has the wrong number of atoms for its type.',
+                name=name,
+                type=coordinate_type,
+                expected=expected,
+                got=len(atoms),
+            )
+            continue
+        result[name] = (coordinate_type, atoms)
+    return result
+
+
 class PotentialEnergySurfaceFit(Schema):
     data_file = Quantity(
         type=str,
@@ -345,6 +414,16 @@ class PotentialEnergySurfaceFit(Schema):
         type=str,
         shape=['*'],
         a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity),
+    )
+
+    structure_file = Quantity(
+        type=str,
+        description="""
+        Uploaded molecular geometry file (e.g. `.xyz`/`.pdb`) that the
+        internal-coordinate `atom_indices` reference; rendered by the structure
+        viewer.
+        """,
+        a_eln=ELNAnnotation(component=ELNComponentEnum.FileEditQuantity),
     )
 
     # `label_quantity='name'` tells the GUI to label each repeating slice by its
@@ -366,7 +445,9 @@ class PotentialEnergySurfaceFit(Schema):
         """
         Read the optional `boss_analysis.yml` (or `.yaml`) configuration file
         placed next to the data file. Returns an empty dict if the file is
-        missing or malformed. Currently supported keys: `parameter_names`.
+        missing or malformed. Supported keys: `parameter_names`, `structure_file`,
+        and `internal_coordinates` (a list of `{name, type, atoms}` mappings; see
+        `parse_internal_coordinates`).
         """
         import os
 
@@ -737,19 +818,30 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
             file_base = os.path.basename(self.data_file)
             archive.metadata.entry_name = f'BOSS Analysis: {file_base}'
 
-        # Names set beforehand via the optional boss_analysis.yml config file;
-        # never overrides names already set (e.g. edited in the ELN)
-        if self.data_file and not self.parameter_names:
-            names = self.load_analysis_config(archive, logger).get('parameter_names')
-            if names is not None and not (
-                isinstance(names, list) and all(isinstance(n, str) for n in names)
+        # Names / geometry set beforehand via the optional boss_analysis.yml config
+        # file; never overrides values already set (e.g. edited in the ELN).
+        if self.data_file:
+            config = self.load_analysis_config(archive, logger)
+            if not self.structure_file and isinstance(
+                config.get('structure_file'), str
             ):
-                logger.warning(
-                    'Invalid `parameter_names` in analysis config: expected a '
-                    'list of names.',
+                self.structure_file = config['structure_file']
+            if not self.parameter_names:
+                # `internal_coordinates` supplies names too; fall back to a plain
+                # `parameter_names` list.
+                coordinates = parse_internal_coordinates(
+                    config.get('internal_coordinates'), logger
                 )
-                names = None
-            self.parameter_names = names or []
+                names = list(coordinates) or config.get('parameter_names')
+                if names is not None and not (
+                    isinstance(names, list) and all(isinstance(n, str) for n in names)
+                ):
+                    logger.warning(
+                        'Invalid `parameter_names` in analysis config: expected a '
+                        'list of names.',
+                    )
+                    names = None
+                self.parameter_names = names or []
 
         needs_compute = self.data_file and (
             not self.parameter_slices
@@ -794,6 +886,37 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
             np.asarray(res['Y'])[:, 0],
         )
 
+    def _build_parameters(self, archive, bounds, logger: 'BoundLogger') -> list:
+        """One inherited parameter per search-space bound: a ``GeometricParameter``
+        (bond/angle/dihedral) when the config declares its internal coordinate,
+        otherwise a plain ``ContinuousParameter``."""
+        coordinates = parse_internal_coordinates(
+            self.load_analysis_config(archive, logger).get('internal_coordinates'),
+            logger,
+        )
+        parameters = []
+        for rank in range(len(bounds)):
+            name = self.parameter_names[rank]
+            lower, upper = float(bounds[rank][0]), float(bounds[rank][1])
+            if name in coordinates:
+                coordinate_type, atoms = coordinates[name]
+                parameters.append(
+                    GeometricParameter(
+                        name=name,
+                        lower_bound=lower,
+                        upper_bound=upper,
+                        coordinate_type=coordinate_type,
+                        atom_indices=atoms,
+                    )
+                )
+            else:
+                parameters.append(
+                    ContinuousParameter(
+                        name=name, lower_bound=lower, upper_bound=upper
+                    )
+                )
+        return parameters
+
     def _compute_pes(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         """
         Parse the BOSS data file, reconstruct the PES fit and uncertainty on all
@@ -833,19 +956,12 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
         if not self.parameter_names or len(self.parameter_names) != len(bounds):
             self.parameter_names = [f'parameter_{i}' for i in range(len(bounds))]
 
-        # Populate the inherited BayesianOptimization schema: continuous parameters
-        # (from the search-space bounds) and a single energy objective to minimise.
-        # The PES slices are added below; per-step records are left for a follow-up.
+        # Populate the inherited BayesianOptimization schema: one parameter per
+        # search-space bound (geometric when declared) and a single energy
+        # objective to minimise. The PES slices are added below.
         self.search_space_type = 'Continuous'
         self.status = 'Finished'
-        self.parameters = [
-            ContinuousParameter(
-                name=self.parameter_names[rank],
-                lower_bound=float(bounds[rank][0]),
-                upper_bound=float(bounds[rank][1]),
-            )
-            for rank in range(len(bounds))
-        ]
+        self.parameters = self._build_parameters(archive, bounds, logger)
         self.objective = Objective(
             type='SingleTargetObjective',
             targets=[Target(name='energy', type='NumericalTarget', mode='MIN')],
