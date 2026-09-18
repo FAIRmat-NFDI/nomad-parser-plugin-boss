@@ -15,13 +15,21 @@ from nomad.datamodel.metainfo.annotations import (
 )
 from nomad.datamodel.metainfo.plot import PlotlyFigure
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
+from nomad_bayesian_optimization.naming import sanitize_quantity_name
 from nomad_bayesian_optimization.schema_packages.bayesian_optimization import (
     BayesianOptimization,
     ContinuousParameter,
     Objective,
     Target,
 )
+from nomad_bayesian_optimization.step_schema import (
+    FieldSpec,
+    attach_step_package,
+    make_step_instance,
+)
 from nomad_measurements.utils import Dataset, HDF5Handler
+from plotly.colors import DEFAULT_PLOTLY_COLORS
+from plotly.subplots import make_subplots
 
 if TYPE_CHECKING:
     from nomad.datamodel.datamodel import EntryArchive
@@ -169,9 +177,11 @@ class ParameterSpaceSlice(ArchiveSection):
     )
 
 
-class Convergence(ArchiveSection):
-    """BOSS convergence diagnostic: predicted global-minimum energy per iteration."""
+class Acquisitions(ArchiveSection):
+    """BOSS acquisition history, mirroring BOSS' ``plot_acquisitions``: the sampled
+    points and the predicted global minimum tracked per iteration."""
 
+    # Predicted global-minimum series (one entry per BO iteration).
     iteration = Quantity(type=int, shape=['*'])
     predicted_minimum = Quantity(
         type=np.float64,
@@ -183,8 +193,95 @@ class Convergence(ArchiveSection):
         type=np.float64,
         unit='eV',
         shape=['*'],
-        description='Std. dev. of the predicted global minimum (sqrt of its GP variance).',
+        description="""
+        Std. dev. of the predicted global minimum (sqrt of its GP variance).
+        """,
     )
+    predicted_minimum_location = Quantity(
+        type=np.float64,
+        shape=['*', '*'],
+        description="""
+        Predicted global-minimum location per iteration
+        (row: iteration, column: parameter).
+        """,
+    )
+
+    # Acquired points (one entry per acquisition; the initial batch shares
+    # iteration 0, so ``acquisition_iteration`` may repeat).
+    acquisition_iteration = Quantity(type=int, shape=['*'])
+    acquired_value = Quantity(
+        type=np.float64,
+        unit='eV',
+        shape=['*'],
+        description='Objective value observed at each acquired point.',
+    )
+    acquired_location = Quantity(
+        type=np.float64,
+        shape=['*', '*'],
+        description='Acquired point location (row: acquisition, column: parameter).',
+    )
+
+
+def extract_acquisitions(res, logger: 'BoundLogger') -> 'Acquisitions | None':
+    """Read BOSS' acquisition history straight off ``BOResults``.
+
+    This is the exact data behind BOSS' ``plot_acquisitions``, with no model
+    re-fit needed: the sampled points ``(X, Y)`` and the predicted global minimum
+    (value, uncertainty and location) tracked per iteration. Returns ``None`` if
+    the results cannot be read.
+    """
+    try:
+        return Acquisitions(
+            iteration=np.asarray(list(res['x_glmin'].keys()), dtype=int),
+            predicted_minimum=res['mu_glmin'].to_array(),
+            predicted_minimum_uncertainty=np.sqrt(
+                np.clip(res['nu_glmin'].to_array(), 0.0, None)
+            ),
+            predicted_minimum_location=res['x_glmin'].to_array(),
+            acquisition_iteration=np.asarray(
+                res.batch_tracker.iteration_labels, dtype=int
+            ),
+            acquired_value=np.asarray(res['Y'])[:, 0],
+            acquired_location=np.asarray(res['X']),
+        )
+    except Exception as e:
+        logger.warning('Could not extract BOSS acquisition history.', error=str(e))
+        return None
+
+
+def build_campaign_steps(archive, parameter_names: list[str], locations, values):
+    """Record each acquired point as a measured ``Step``.
+
+    Reuses the nomad-bayesian-optimization step machinery (no BayBE needed): a
+    per-campaign ``CampaignStep`` subclass with one numeric column per parameter
+    plus the ``energy`` target, each tagged with ``baybe_name`` so the inherited
+    counters, per-step table and progress figure populate. Every acquisition is a
+    recorded measurement (``recommended=False``), never a pending recommendation.
+    """
+    field_specs = [
+        FieldSpec(
+            name=name, quantity_name=sanitize_quantity_name(name), type='float'
+        )
+        for name in parameter_names
+    ]
+    field_specs.append(
+        FieldSpec(
+            name='energy',
+            quantity_name=sanitize_quantity_name('energy'),
+            type='float',
+            unit='eV',
+            is_target=True,
+        )
+    )
+    step_def = attach_step_package(archive, field_specs)
+    steps = []
+    for location, value in zip(locations, values):
+        record = {name: float(location[i]) for i, name in enumerate(parameter_names)}
+        record['energy'] = float(value)
+        steps.append(
+            make_step_instance(step_def, record, field_specs, recommended=False)
+        )
+    return steps
 
 
 class PotentialEnergySurfaceFit(Schema):
@@ -213,7 +310,7 @@ class PotentialEnergySurfaceFit(Schema):
         sub_section=ParameterSpaceSlice.m_def, repeats=True, label_quantity='name'
     )
 
-    convergence = SubSection(sub_section=Convergence.m_def)
+    acquisitions = SubSection(sub_section=Acquisitions.m_def)
 
     # Optional per-upload configuration file, read from the data file's
     # directory. Kept generic so future options can be added without renaming.
@@ -370,57 +467,128 @@ class PotentialEnergySurfaceFit(Schema):
         for parameter_slice, dataset, new_reference in applied_updates:
             setattr(parameter_slice, dataset, new_reference)
 
-    def _convergence_figure(self):
-        """Predicted global-minimum energy vs iteration, drawn in the same style as
-        the nomad-bayesian-optimization progress plots (a PlotlyFigure on `figures`)."""
-        conv = self.convergence
-        if conv is None or conv.predicted_minimum is None or len(conv.predicted_minimum) == 0:
+    def _acquisitions_figure(self):
+        """BOSS acquisition history as a two-panel Plotly figure, in the same style
+        as the nomad-bayesian-optimization progress plots (a PlotlyFigure on
+        ``figures``). Mirrors BOSS' ``plot_acquisitions``:
+
+        * top: acquired objective values with the predicted global minimum
+          (``mu`` and its ``mu +/- sigma`` band);
+        * bottom: acquired locations with the predicted global-minimum location,
+          one trace pair per parameter (labelled by parameter name).
+        """
+        acq = self.acquisitions
+        if (
+            acq is None
+            or acq.acquired_value is None
+            or len(acq.acquired_value) == 0
+        ):
             return None
-        iters = [int(i) for i in conv.iteration]
-        energy = [float(getattr(v, 'magnitude', v)) for v in conv.predicted_minimum]
-        unc = (
-            [float(getattr(v, 'magnitude', v)) for v in conv.predicted_minimum_uncertainty]
-            if conv.predicted_minimum_uncertainty is not None
-            else [0.0] * len(energy)
+
+        def _floats(values):
+            return [float(getattr(v, 'magnitude', v)) for v in values]
+
+        acq_iters = [int(i) for i in acq.acquisition_iteration]
+        acquired = _floats(acq.acquired_value)
+        acquired_loc = np.asarray(acq.acquired_location, dtype=float)
+
+        min_iters = [int(i) for i in acq.iteration]
+        mu = _floats(acq.predicted_minimum)
+        std = (
+            _floats(acq.predicted_minimum_uncertainty)
+            if acq.predicted_minimum_uncertainty is not None
+            else [0.0] * len(mu)
         )
-        best, run = [], None
-        for e in energy:
-            run = e if run is None else min(run, e)
-            best.append(run)
-        upper = [e + u for e, u in zip(energy, unc)]
-        lower = [e - u for e, u in zip(energy, unc)]
-        figure = go.Figure(
-            data=[
-                go.Scatter(
-                    x=iters + iters[::-1],
-                    y=upper + lower[::-1],
-                    fill='toself',
-                    fillcolor='rgba(31,119,180,0.15)',
-                    line=dict(color='rgba(0,0,0,0)'),
-                    hoverinfo='skip',
-                    showlegend=False,
-                    name='Uncertainty',
-                ),
-                go.Scatter(x=iters, y=energy, mode='lines+markers', name='Predicted minimum'),
-                go.Scatter(
-                    x=iters,
-                    y=best,
-                    mode='lines',
-                    line_shape='hv',
-                    line_dash='dash',
-                    name='Best so far',
-                ),
-            ]
+        min_loc = np.asarray(acq.predicted_minimum_location, dtype=float)
+        names = list(self.parameter_names or [])
+
+        figure = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.18
         )
+
+        # Top panel: predicted minimum (mu +/- sigma) and acquired values.
+        upper = [m + s for m, s in zip(mu, std)]
+        lower = [m - s for m, s in zip(mu, std)]
+        figure.add_trace(
+            go.Scatter(
+                x=min_iters + min_iters[::-1],
+                y=upper + lower[::-1],
+                fill='toself',
+                fillcolor='rgba(0,0,0,0.15)',
+                line=dict(color='rgba(0,0,0,0)'),
+                hoverinfo='skip',
+                showlegend=False,
+                name='Uncertainty',
+            ),
+            row=1,
+            col=1,
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=min_iters, y=mu, mode='lines+markers', name='Predicted minimum μ'
+            ),
+            row=1,
+            col=1,
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=acq_iters,
+                y=acquired,
+                mode='markers',
+                marker=dict(symbol='circle-open'),
+                name='Acquired value',
+            ),
+            row=1,
+            col=1,
+        )
+
+        # Bottom panel: acquired and predicted-minimum locations, per parameter.
+        n_dims = acquired_loc.shape[1] if acquired_loc.ndim > 1 else 0
+        for i in range(n_dims):
+            label = names[i] if i < len(names) else f'parameter_{i}'
+            color = DEFAULT_PLOTLY_COLORS[i % len(DEFAULT_PLOTLY_COLORS)]
+            figure.add_trace(
+                go.Scatter(
+                    x=acq_iters,
+                    y=list(acquired_loc[:, i]),
+                    mode='markers',
+                    marker=dict(symbol='circle-open', color=color),
+                    name=f'{label} (acquired)',
+                    legendgroup=label,
+                ),
+                row=2,
+                col=1,
+            )
+            if min_loc.ndim > 1 and i < min_loc.shape[1]:
+                figure.add_trace(
+                    go.Scatter(
+                        x=min_iters,
+                        y=list(min_loc[:, i]),
+                        mode='lines',
+                        line=dict(color=color),
+                        name=f'{label} (predicted min)',
+                        legendgroup=label,
+                    ),
+                    row=2,
+                    col=1,
+                )
+
+        figure.update_xaxes(tickformat='d', title_text='Iteration', row=2, col=1)
+        figure.update_yaxes(title_text='y and predicted minimum μ (eV)', row=1, col=1)
+        figure.update_yaxes(title_text='x and predicted-min location', row=2, col=1)
+        # One legend per panel, each sitting just above its own subplot. With
+        # vertical_spacing=0.18 row 1 spans the paper domain [0.59, 1.0] and row 2
+        # [0.0, 0.41], so legend2 sits in the gap just above row 2.
+        figure.update_traces(legend='legend', row=1, col=1)
+        figure.update_traces(legend='legend2', row=2, col=1)
         figure.update_layout(
             template='plotly_white',
-            xaxis_title='Iteration',
-            xaxis_tickformat='d',
-            yaxis_title='Predicted minimum energy (eV)',
+            height=800,
             showlegend=True,
             legend=dict(orientation='h', yanchor='bottom', y=1.02, x=0),
+            legend2=dict(orientation='h', yanchor='bottom', y=0.44, x=0),
         )
-        return PlotlyFigure(label='Convergence', figure=figure.to_plotly_json())
+        return PlotlyFigure(label='acquisitions', figure=figure.to_plotly_json())
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
         super().normalize(archive, logger)
@@ -495,9 +663,9 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
 
         super().normalize(archive, logger)
 
-        # Append the convergence figure after BayesianOptimization.normalize rebuilds
+        # Append the acquisitions figure after BayesianOptimization.normalize rebuilds
         # self.figures from the (currently empty) steps, so it is not clobbered.
-        figure = self._convergence_figure()
+        figure = self._acquisitions_figure()
         if figure is not None:
             self.figures = list(self.figures or []) + [figure]
 
@@ -571,29 +739,17 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
 
         iteration_procedure = np.arange(iter_no, 0, -1)
 
-        # Convergence diagnostic: predicted global-minimum energy per iteration.
-        # Cheap — reuse the value stored during the run, else evaluate the model at
-        # the predicted-minimum location (the same reconstruction used for the slices).
-        conv_iter, conv_energy, conv_unc = [], [], []
-        for itr in range(1, iter_no + 1):
-            try:
-                if not res['mu_glmin'].is_default(itr):
-                    mu = float(res.select('mu_glmin', itr))
-                    nu = float(res.select('nu_glmin', itr))
-                else:
-                    x_glmin = np.atleast_2d(res.select('x_glmin', itr))
-                    mean, variance = res.reconstruct_model(itr).predict(x_glmin)
-                    mu, nu = float(mean[0, 0]), float(variance[0, 0])
-            except Exception:
-                continue
-            conv_iter.append(itr)
-            conv_energy.append(mu)
-            conv_unc.append(float(np.sqrt(max(nu, 0.0))))
-        if conv_iter:
-            self.convergence = Convergence(
-                iteration=np.array(conv_iter),
-                predicted_minimum=np.array(conv_energy),
-                predicted_minimum_uncertainty=np.array(conv_unc),
+        # Acquisition history (sampled points + predicted global minimum per
+        # iteration); drives the two-panel Acquisitions figure.
+        self.acquisitions = extract_acquisitions(res, logger)
+        # Record each acquired point as a measured Step so the inherited
+        # BayesianOptimization counters, step table and progress figure populate.
+        if self.acquisitions is not None:
+            self.steps = build_campaign_steps(
+                archive,
+                list(self.parameter_names),
+                np.asarray(res['X']),
+                np.asarray(res['Y'])[:, 0],
             )
 
         group_names = slice_group_names(self.parameter_names)

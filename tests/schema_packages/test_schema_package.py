@@ -462,13 +462,26 @@ def test_real_boss_compute(upload_dir, assert_h5web_group):
         )
 
 
-def test_convergence_figure(upload_dir):
-    """The entry exposes BOSS convergence data and a matching progress-style figure."""
+def test_acquisitions_figure(upload_dir):
+    """The entry exposes BOSS acquisition history and a matching two-panel figure."""
     archive = parse(str(upload_dir / 'test.archive.yaml'))[0]
     normalize_all(archive)
     data = archive.data
-    assert data.convergence is not None
-    assert len(data.convergence.predicted_minimum) > 0
-    assert len(data.convergence.iteration) == len(data.convergence.predicted_minimum)
+    acq = data.acquisitions
+    assert acq is not None
+    # predicted-minimum series (top panel) is populated and self-consistent
+    assert len(acq.predicted_minimum) > 0
+    assert len(acq.iteration) == len(acq.predicted_minimum)
+    # acquired points (top scatter + bottom panel) are populated
+    assert len(acq.acquired_value) > 0
+    assert len(acq.acquisition_iteration) == len(acq.acquired_value)
     labels = [getattr(figure, 'label', None) for figure in (data.figures or [])]
-    assert 'Convergence' in labels
+    assert 'acquisitions' in labels
+
+    # each acquired point becomes a measured Step, lighting up the inherited
+    # BayesianOptimization counters and the per-target progress figure
+    assert len(data.steps) == len(acq.acquired_value)
+    assert data.n_steps == len(data.steps)
+    assert data.n_measurements == data.n_steps
+    assert data.n_pending_recommendations == 0
+    assert 'energy' in labels  # thin-layer progress figure from steps
