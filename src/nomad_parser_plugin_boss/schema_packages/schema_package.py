@@ -12,8 +12,13 @@ from nomad.datamodel.metainfo.annotations import (
     H5WebAnnotation,
     SectionProperties,
 )
-from nomad.datamodel.metainfo.plot import PlotSection
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
+from nomad_bayesian_optimization.schema_packages.bayesian_optimization import (
+    BayesianOptimization,
+    ContinuousParameter,
+    Objective,
+    Target,
+)
 from nomad_measurements.utils import Dataset, HDF5Handler
 
 if TYPE_CHECKING:
@@ -348,10 +353,15 @@ class PotentialEnergySurfaceFit(Schema):
         self.refresh_h5web_labels(archive, logger)
 
 
-class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
+class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
     """
     ELN entry for BOSS Bayesian Optimization analysis results.
-    This section combines the data model with ELN features and plotting capabilities.
+
+    Inherits the generic `BayesianOptimization` schema (parameters, objective,
+    steps, status, counters, progress figures) so a BOSS run surfaces as a
+    first-class Bayesian-optimization entry, and extends it with the BOSS-specific
+    potential-energy-surface slices (`parameter_slices` + H5Web). `BayesianOptimization`
+    already provides `PlotSection` + `EntryData`.
     """
 
     m_def = Section(
@@ -449,6 +459,24 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, EntryData, PlotSection):
             )
         if not self.parameter_names or len(self.parameter_names) != len(bounds):
             self.parameter_names = [f'parameter_{i}' for i in range(len(bounds))]
+
+        # Populate the inherited BayesianOptimization schema: continuous parameters
+        # (from the search-space bounds) and a single energy objective to minimise.
+        # The PES slices are added below; per-step records are left for a follow-up.
+        self.search_space_type = 'Continuous'
+        self.status = 'Finished'
+        self.parameters = [
+            ContinuousParameter(
+                name=self.parameter_names[rank],
+                lower_bound=float(bounds[rank][0]),
+                upper_bound=float(bounds[rank][1]),
+            )
+            for rank in range(len(bounds))
+        ]
+        self.objective = Objective(
+            type='SingleTargetObjective',
+            targets=[Target(name='energy', type='NumericalTarget', mode='MIN')],
+        )
 
         h5_filename = f'{self.data_file.rsplit(".", 1)[0]}.h5'
         self.auxiliary_file = h5_filename

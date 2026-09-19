@@ -12,7 +12,15 @@ jobs:
     - name: Install dependencies
       run: |
         pip install --upgrade pip
+        # nomad-bayesian-optimization is not published to an index yet; install it
+        # from git first so the plugin's dependency on it resolves.
+        pip install "git+https://github.com/FAIRmat-NFDI/nomad-bayesian-optimization.git" --index-url https://gitlab.mpcdf.mpg.de/api/v4/projects/2187/packages/pypi/simple
         pip install '.[dev]' --index-url https://gitlab.mpcdf.mpg.de/api/v4/projects/2187/packages/pypi/simple
+        # nomad eagerly imports every plugin entry point on load, including the
+        # nomad-bayesian-optimization action whose module imports temporalio at the
+        # top; baybe stays lazy (inside the action's load method), so temporalio
+        # alone lets the test suite import the plugin.
+        pip install temporalio --index-url https://gitlab.mpcdf.mpg.de/api/v4/projects/2187/packages/pypi/simple
         pip install coverage coveralls
     - name: Test with pytest
       run: |
@@ -38,6 +46,7 @@ jobs:
         python -m build --sdist
     - name: Install the package
       run: |
+        pip install "git+https://github.com/FAIRmat-NFDI/nomad-bayesian-optimization.git" --index-url https://gitlab.mpcdf.mpg.de/api/v4/projects/2187/packages/pypi/simple
         pip install dist/*.tar.gz --index-url https://gitlab.mpcdf.mpg.de/api/v4/projects/2187/packages/pypi/simple
   ruff-linting:
     runs-on: ubuntu-latest
