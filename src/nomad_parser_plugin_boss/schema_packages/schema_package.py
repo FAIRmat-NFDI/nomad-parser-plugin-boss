@@ -4,6 +4,7 @@ from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 import numpy as np
+import plotly.graph_objects as go
 from nomad.datamodel.data import ArchiveSection, EntryData, Schema
 from nomad.datamodel.hdf5 import HDF5Reference
 from nomad.datamodel.metainfo.annotations import (
@@ -12,14 +13,23 @@ from nomad.datamodel.metainfo.annotations import (
     H5WebAnnotation,
     SectionProperties,
 )
+from nomad.datamodel.metainfo.plot import PlotlyFigure
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
+from nomad_bayesian_optimization.naming import sanitize_quantity_name
 from nomad_bayesian_optimization.schema_packages.bayesian_optimization import (
     BayesianOptimization,
     ContinuousParameter,
     Objective,
     Target,
 )
+from nomad_bayesian_optimization.step_schema import (
+    FieldSpec,
+    attach_step_package,
+    make_step_instance,
+)
 from nomad_measurements.utils import Dataset, HDF5Handler
+from plotly.colors import DEFAULT_PLOTLY_COLORS
+from plotly.subplots import make_subplots
 
 if TYPE_CHECKING:
     from nomad.datamodel.datamodel import EntryArchive
@@ -167,6 +177,156 @@ class ParameterSpaceSlice(ArchiveSection):
     )
 
 
+class Acquisitions(ArchiveSection):
+    """BOSS acquisition history, mirroring BOSS' ``plot_acquisitions``: the sampled
+    points and the predicted global minimum tracked per iteration."""
+
+    # Predicted global-minimum series (one entry per BO iteration).
+    iteration = Quantity(type=int, shape=['*'])
+    predicted_minimum = Quantity(
+        type=np.float64,
+        unit='eV',
+        shape=['*'],
+        description='Predicted global-minimum energy per iteration.',
+    )
+    predicted_minimum_uncertainty = Quantity(
+        type=np.float64,
+        unit='eV',
+        shape=['*'],
+        description="""
+        Std. dev. of the predicted global minimum (sqrt of its GP variance).
+        """,
+    )
+    predicted_minimum_location = Quantity(
+        type=np.float64,
+        shape=['*', '*'],
+        description="""
+        Predicted global-minimum location per iteration
+        (row: iteration, column: parameter).
+        """,
+    )
+
+    # Acquired points (one entry per acquisition; the initial batch shares
+    # iteration 0, so ``acquisition_iteration`` may repeat).
+    acquisition_iteration = Quantity(type=int, shape=['*'])
+    acquired_value = Quantity(
+        type=np.float64,
+        unit='eV',
+        shape=['*'],
+        description='Objective value observed at each acquired point.',
+    )
+    acquired_location = Quantity(
+        type=np.float64,
+        shape=['*', '*'],
+        description='Acquired point location (row: acquisition, column: parameter).',
+    )
+
+
+def extract_acquisitions(res, logger: 'BoundLogger') -> 'Acquisitions | None':
+    """Read BOSS' acquisition history straight off ``BOResults``.
+
+    This is the exact data behind BOSS' ``plot_acquisitions``, with no model
+    re-fit needed: the sampled points ``(X, Y)`` and the predicted global minimum
+    (value, uncertainty and location) tracked per iteration. Returns ``None`` if
+    the results cannot be read.
+    """
+    try:
+        return Acquisitions(
+            iteration=np.asarray(list(res['x_glmin'].keys()), dtype=int),
+            predicted_minimum=res['mu_glmin'].to_array(),
+            predicted_minimum_uncertainty=np.sqrt(
+                np.clip(res['nu_glmin'].to_array(), 0.0, None)
+            ),
+            predicted_minimum_location=res['x_glmin'].to_array(),
+            acquisition_iteration=np.asarray(
+                res.batch_tracker.iteration_labels, dtype=int
+            ),
+            acquired_value=np.asarray(res['Y'])[:, 0],
+            acquired_location=np.asarray(res['X']),
+        )
+    except Exception as e:
+        logger.warning('Could not extract BOSS acquisition history.', error=str(e))
+        return None
+
+
+class Hyperparameters(ArchiveSection):
+    """BOSS GP kernel hyperparameters tracked per iteration, mirroring BOSS'
+    ``plot_hyperparameters``: the kernel variance and the per-dimension
+    lengthscales as the surrogate is refit."""
+
+    iteration = Quantity(type=int, shape=['*'])
+    kernel_variance = Quantity(
+        type=np.float64,
+        shape=['*'],
+        description="""
+        Signal variance of the GP kernel per iteration. This is a first sanity
+        check on the model: it sets the range of the surrogate's output.
+        """,
+    )
+    lengthscales = Quantity(
+        type=np.float64,
+        shape=['*', '*'],
+        description="""
+        Kernel lengthscale per iteration and parameter (row: iteration, column:
+        parameter). A lengthscale is inversely related to the sensitivity of the
+        objective to that parameter.
+        """,
+    )
+
+
+def extract_hyperparameters(res, logger: 'BoundLogger') -> 'Hyperparameters | None':
+    """Read the GP kernel hyperparameters per iteration off ``BOResults`` — the
+    data behind BOSS' ``plot_hyperparameters``. ``model_params`` stores one row
+    per iteration: ``[variance, lengthscale_1, ..., lengthscale_dim]``. Returns
+    ``None`` if the results cannot be read."""
+    try:
+        model_params = res['model_params']
+        params = model_params.to_array(gaps=False)
+        return Hyperparameters(
+            iteration=np.asarray(list(model_params.keys()), dtype=int),
+            kernel_variance=params[:, 0],
+            lengthscales=params[:, 1:],
+        )
+    except Exception as e:
+        logger.warning('Could not extract BOSS hyperparameters.', error=str(e))
+        return None
+
+
+def build_campaign_steps(archive, parameter_names: list[str], locations, values):
+    """Record each acquired point as a measured ``Step``.
+
+    Reuses the nomad-bayesian-optimization step machinery (no BayBE needed): a
+    per-campaign ``CampaignStep`` subclass with one numeric column per parameter
+    plus the ``energy`` target, each tagged with ``baybe_name`` so the inherited
+    counters, per-step table and progress figure populate. Every acquisition is a
+    recorded measurement (``recommended=False``), never a pending recommendation.
+    """
+    field_specs = [
+        FieldSpec(
+            name=name, quantity_name=sanitize_quantity_name(name), type='float'
+        )
+        for name in parameter_names
+    ]
+    field_specs.append(
+        FieldSpec(
+            name='energy',
+            quantity_name=sanitize_quantity_name('energy'),
+            type='float',
+            unit='eV',
+            is_target=True,
+        )
+    )
+    step_def = attach_step_package(archive, field_specs)
+    steps = []
+    for location, value in zip(locations, values):
+        record = {name: float(location[i]) for i, name in enumerate(parameter_names)}
+        record['energy'] = float(value)
+        steps.append(
+            make_step_instance(step_def, record, field_specs, recommended=False)
+        )
+    return steps
+
+
 class PotentialEnergySurfaceFit(Schema):
     data_file = Quantity(
         type=str,
@@ -192,6 +352,9 @@ class PotentialEnergySurfaceFit(Schema):
     parameter_slices = SubSection(
         sub_section=ParameterSpaceSlice.m_def, repeats=True, label_quantity='name'
     )
+
+    acquisitions = SubSection(sub_section=Acquisitions.m_def)
+    hyperparameters = SubSection(sub_section=Hyperparameters.m_def)
 
     # Optional per-upload configuration file, read from the data file's
     # directory. Kept generic so future options can be added without renaming.
@@ -348,6 +511,188 @@ class PotentialEnergySurfaceFit(Schema):
         for parameter_slice, dataset, new_reference in applied_updates:
             setattr(parameter_slice, dataset, new_reference)
 
+    def _acquisitions_figure(self):
+        """BOSS acquisition history as a two-panel Plotly figure, in the same style
+        as the nomad-bayesian-optimization progress plots (a PlotlyFigure on
+        ``figures``). Mirrors BOSS' ``plot_acquisitions``:
+
+        * top: acquired objective values with the predicted global minimum
+          (``mu`` and its ``mu +/- sigma`` band);
+        * bottom: acquired locations with the predicted global-minimum location,
+          one trace pair per parameter (labelled by parameter name).
+        """
+        acq = self.acquisitions
+        if (
+            acq is None
+            or acq.acquired_value is None
+            or len(acq.acquired_value) == 0
+        ):
+            return None
+
+        def _floats(values):
+            return [float(getattr(v, 'magnitude', v)) for v in values]
+
+        acq_iters = [int(i) for i in acq.acquisition_iteration]
+        acquired = _floats(acq.acquired_value)
+        acquired_loc = np.asarray(acq.acquired_location, dtype=float)
+
+        min_iters = [int(i) for i in acq.iteration]
+        mu = _floats(acq.predicted_minimum)
+        std = (
+            _floats(acq.predicted_minimum_uncertainty)
+            if acq.predicted_minimum_uncertainty is not None
+            else [0.0] * len(mu)
+        )
+        min_loc = np.asarray(acq.predicted_minimum_location, dtype=float)
+        names = list(self.parameter_names or [])
+
+        figure = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.18
+        )
+
+        # Top panel: predicted minimum (mu +/- sigma) and acquired values.
+        upper = [m + s for m, s in zip(mu, std)]
+        lower = [m - s for m, s in zip(mu, std)]
+        figure.add_trace(
+            go.Scatter(
+                x=min_iters + min_iters[::-1],
+                y=upper + lower[::-1],
+                fill='toself',
+                fillcolor='rgba(0,0,0,0.15)',
+                line=dict(color='rgba(0,0,0,0)'),
+                hoverinfo='skip',
+                showlegend=False,
+                name='Uncertainty',
+            ),
+            row=1,
+            col=1,
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=min_iters, y=mu, mode='lines+markers', name='Predicted minimum μ'
+            ),
+            row=1,
+            col=1,
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=acq_iters,
+                y=acquired,
+                mode='markers',
+                marker=dict(symbol='circle-open'),
+                name='Acquired value',
+            ),
+            row=1,
+            col=1,
+        )
+
+        # Bottom panel: acquired and predicted-minimum locations, per parameter.
+        n_dims = acquired_loc.shape[1] if acquired_loc.ndim > 1 else 0
+        for i in range(n_dims):
+            label = names[i] if i < len(names) else f'parameter_{i}'
+            color = DEFAULT_PLOTLY_COLORS[i % len(DEFAULT_PLOTLY_COLORS)]
+            figure.add_trace(
+                go.Scatter(
+                    x=acq_iters,
+                    y=list(acquired_loc[:, i]),
+                    mode='markers',
+                    marker=dict(symbol='circle-open', color=color),
+                    name=f'{label} (acquired)',
+                    legendgroup=label,
+                ),
+                row=2,
+                col=1,
+            )
+            if min_loc.ndim > 1 and i < min_loc.shape[1]:
+                figure.add_trace(
+                    go.Scatter(
+                        x=min_iters,
+                        y=list(min_loc[:, i]),
+                        mode='lines',
+                        line=dict(color=color),
+                        name=f'{label} (predicted min)',
+                        legendgroup=label,
+                    ),
+                    row=2,
+                    col=1,
+                )
+
+        figure.update_xaxes(tickformat='d', title_text='Iteration', row=2, col=1)
+        figure.update_yaxes(title_text='y and predicted minimum μ (eV)', row=1, col=1)
+        figure.update_yaxes(title_text='x and predicted-min location', row=2, col=1)
+        # One legend per panel, each sitting just above its own subplot. With
+        # vertical_spacing=0.18 row 1 spans the paper domain [0.59, 1.0] and row 2
+        # [0.0, 0.41], so legend2 sits in the gap just above row 2.
+        figure.update_traces(legend='legend', row=1, col=1)
+        figure.update_traces(legend='legend2', row=2, col=1)
+        figure.update_layout(
+            template='plotly_white',
+            height=800,
+            showlegend=True,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, x=0),
+            legend2=dict(orientation='h', yanchor='bottom', y=0.44, x=0),
+        )
+        return PlotlyFigure(label='acquisitions', figure=figure.to_plotly_json())
+
+    def _hyperparameters_figure(self):
+        """GP kernel hyperparameters vs iteration as a two-panel Plotly figure,
+        in the same style as the acquisitions figure. Top: kernel variance.
+        Bottom: per-parameter lengthscales (labelled by parameter name)."""
+        hyper = self.hyperparameters
+        if (
+            hyper is None
+            or hyper.kernel_variance is None
+            or len(hyper.kernel_variance) == 0
+        ):
+            return None
+
+        iters = [int(i) for i in hyper.iteration]
+        variance = [float(v) for v in hyper.kernel_variance]
+        lengthscales = np.asarray(hyper.lengthscales, dtype=float)
+        names = list(self.parameter_names or [])
+
+        figure = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.18
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=iters, y=variance, mode='lines+markers', name='Kernel variance σ²'
+            ),
+            row=1,
+            col=1,
+        )
+        n_dims = lengthscales.shape[1] if lengthscales.ndim > 1 else 0
+        for i in range(n_dims):
+            label = names[i] if i < len(names) else f'parameter_{i}'
+            color = DEFAULT_PLOTLY_COLORS[i % len(DEFAULT_PLOTLY_COLORS)]
+            figure.add_trace(
+                go.Scatter(
+                    x=iters,
+                    y=list(lengthscales[:, i]),
+                    mode='lines+markers',
+                    line=dict(color=color),
+                    name=f'{label} lengthscale',
+                ),
+                row=2,
+                col=1,
+            )
+
+        figure.update_xaxes(tickformat='d', title_text='Iteration', row=2, col=1)
+        figure.update_yaxes(title_text='Kernel variance σ²', row=1, col=1)
+        figure.update_yaxes(title_text='Lengthscale ℓ', row=2, col=1)
+        figure.update_traces(legend='legend', row=1, col=1)
+        figure.update_traces(legend='legend2', row=2, col=1)
+        figure.update_layout(
+            template='plotly_white',
+            height=800,
+            showlegend=True,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, x=0),
+            legend2=dict(orientation='h', yanchor='bottom', y=0.44, x=0),
+        )
+        return PlotlyFigure(
+            label='hyperparameters', figure=figure.to_plotly_json()
+        )
+
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger'):
         super().normalize(archive, logger)
         self.refresh_h5web_labels(archive, logger)
@@ -421,6 +766,34 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
 
         super().normalize(archive, logger)
 
+        # Append the BOSS diagnostic figures after BayesianOptimization.normalize
+        # rebuilds self.figures from the (currently empty) steps, so they are not
+        # clobbered.
+        extra_figures = [
+            self._acquisitions_figure(),
+            self._hyperparameters_figure(),
+        ]
+        for figure in extra_figures:
+            if figure is not None:
+                self.figures = list(self.figures or []) + [figure]
+
+    def _populate_bo_records(
+        self, archive: 'EntryArchive', res, logger: 'BoundLogger'
+    ) -> None:
+        """From the BOSS results, populate the acquisition history, the GP kernel
+        hyperparameters and the measured ``steps`` (which light up the inherited
+        BayesianOptimization counters, step table and progress figure)."""
+        self.acquisitions = extract_acquisitions(res, logger)
+        self.hyperparameters = extract_hyperparameters(res, logger)
+        if self.acquisitions is None:
+            return
+        self.steps = build_campaign_steps(
+            archive,
+            list(self.parameter_names),
+            np.asarray(res['X']),
+            np.asarray(res['Y'])[:, 0],
+        )
+
     def _compute_pes(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         """
         Parse the BOSS data file, reconstruct the PES fit and uncertainty on all
@@ -490,6 +863,9 @@ class ELNBOSSAnalysis(PotentialEnergySurfaceFit, BayesianOptimization):
         handler = HDF5Handler(filename=h5_filename, archive=archive, logger=logger)
 
         iteration_procedure = np.arange(iter_no, 0, -1)
+
+        # Acquisition history, GP hyperparameters and measured steps.
+        self._populate_bo_records(archive, res, logger)
 
         group_names = slice_group_names(self.parameter_names)
         for parameter_counter, rank in enumerate(generate_slices(len(bounds))):

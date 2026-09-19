@@ -460,3 +460,45 @@ def test_real_boss_compute(upload_dir, assert_h5web_group):
             title='x vs y',
             long_names={'parameters_x': 'x', 'parameters_y': 'y'},
         )
+
+
+def test_acquisitions_figure(upload_dir):
+    """The entry exposes BOSS acquisition history and a matching two-panel figure."""
+    archive = parse(str(upload_dir / 'test.archive.yaml'))[0]
+    normalize_all(archive)
+    data = archive.data
+    acq = data.acquisitions
+    assert acq is not None
+    # predicted-minimum series (top panel) is populated and self-consistent
+    assert len(acq.predicted_minimum) > 0
+    assert len(acq.iteration) == len(acq.predicted_minimum)
+    # acquired points (top scatter + bottom panel) are populated
+    assert len(acq.acquired_value) > 0
+    assert len(acq.acquisition_iteration) == len(acq.acquired_value)
+    labels = [getattr(figure, 'label', None) for figure in (data.figures or [])]
+    assert 'acquisitions' in labels
+
+    # each acquired point becomes a measured Step, lighting up the inherited
+    # BayesianOptimization counters and the per-target progress figure
+    assert len(data.steps) == len(acq.acquired_value)
+    assert data.n_steps == len(data.steps)
+    assert data.n_measurements == data.n_steps
+    assert data.n_pending_recommendations == 0
+    assert 'energy' in labels  # thin-layer progress figure from steps
+
+
+def test_hyperparameters_figure(upload_dir):
+    """The entry exposes BOSS GP hyperparameters (kernel variance + per-parameter
+    lengthscales) and a matching two-panel figure."""
+    archive = parse(str(upload_dir / 'test.archive.yaml'))[0]
+    normalize_all(archive)
+    data = archive.data
+    hyper = data.hyperparameters
+    assert hyper is not None
+    assert len(hyper.kernel_variance) > 0
+    assert len(hyper.iteration) == len(hyper.kernel_variance)
+    # one lengthscale per parameter, per iteration
+    lengthscales = np.asarray(hyper.lengthscales)
+    assert lengthscales.shape == (len(hyper.iteration), len(data.parameter_names))
+    labels = [getattr(figure, 'label', None) for figure in (data.figures or [])]
+    assert 'hyperparameters' in labels
