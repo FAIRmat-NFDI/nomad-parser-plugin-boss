@@ -12,15 +12,14 @@ from nomad.datamodel.metainfo.annotations import (
     H5WebAnnotation,
     SectionProperties,
 )
-from nomad.datamodel.metainfo.plot import PlotSection
 from nomad.metainfo import Quantity, SchemaPackage, Section, SubSection
-from nomad_measurements.utils import Dataset, HDF5Handler
 from nomad_bayesian_optimization.schema_packages.bayesian_optimization import (
     BayesianOptimization,
     ContinuousParameter,
     Objective,
     Target,
 )
+from nomad_measurements.utils import Dataset, HDF5Handler
 
 if TYPE_CHECKING:
     from nomad.datamodel.datamodel import EntryArchive
