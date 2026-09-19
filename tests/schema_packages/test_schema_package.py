@@ -11,7 +11,9 @@ from nomad.client import normalize_all, parse
 
 from nomad_parser_plugin_boss.schema_packages.schema_package import (
     ELNBOSSAnalysis,
+    GeometricParameter,
     h5web_attribute_map,
+    parse_internal_coordinates,
     sanitize_h5_name,
     slice_group_names,
 )
@@ -502,3 +504,58 @@ def test_hyperparameters_figure(upload_dir):
     assert lengthscales.shape == (len(hyper.iteration), len(data.parameter_names))
     labels = [getattr(figure, 'label', None) for figure in (data.figures or [])]
     assert 'hyperparameters' in labels
+
+
+def test_parse_internal_coordinates_validation():
+    """Only well-formed {name, type, atoms} entries with the right atom count for
+    their type survive; the rest are skipped."""
+    import structlog
+
+    logger = structlog.get_logger()
+    spec = [
+        {'name': 'a', 'type': 'bond', 'atoms': [0, 1]},
+        {'name': 'b', 'type': 'dihedral', 'atoms': [0, 1, 2]},  # too few atoms
+        {'name': 'c', 'type': 'twist', 'atoms': [0, 1]},  # unknown type
+        {'type': 'angle', 'atoms': [0, 1, 2]},  # missing name
+        {'name': 'd', 'type': 'angle', 'atoms': [0, 1, 2]},
+    ]
+    result = parse_internal_coordinates(spec, logger)
+    assert result == {'a': ('bond', [0, 1]), 'd': ('angle', [0, 1, 2])}
+    # non-list input is rejected quietly
+    assert parse_internal_coordinates('nope', logger) == {}
+    assert parse_internal_coordinates(None, logger) == {}
+
+
+def test_internal_coordinates_from_config(upload_dir):
+    """A boss_analysis.yml declaring internal_coordinates + structure_file yields
+    typed GeometricParameters (bond/angle/dihedral) and a structure-file reference."""
+    (upload_dir / 'boss_analysis.yml').write_text(
+        'structure_file: molecule.xyz\n'
+        'internal_coordinates:\n'
+        '  - {name: phi, type: dihedral, atoms: [0, 1, 2, 3]}\n'
+        '  - {name: psi, type: angle, atoms: [1, 2, 3]}\n'
+    )
+    mainfile = upload_dir / 'noname.archive.yaml'
+    mainfile.write_text(
+        'data:\n'
+        '  m_def: nomad_parser_plugin_boss.schema_packages.schema_package'
+        '.ELNBOSSAnalysis\n'
+        '  data_file: boss.rst\n'
+    )
+    archive = parse(str(mainfile))[0]
+    normalize_all(archive)
+    data = archive.data
+
+    # structure file + names derived from the declared coordinates
+    assert data.structure_file == 'molecule.xyz'
+    assert list(data.parameter_names) == ['phi', 'psi']
+
+    params = data.parameters
+    assert len(params) == len(data.parameter_names)
+    assert all(isinstance(p, GeometricParameter) for p in params)
+    assert params[0].coordinate_type == 'dihedral'
+    assert list(params[0].atom_indices) == [0, 1, 2, 3]
+    assert params[1].coordinate_type == 'angle'
+    assert list(params[1].atom_indices) == [1, 2, 3]
+    # bounds still populated from the inherited ContinuousParameter
+    assert params[0].lower_bound is not None and params[0].upper_bound is not None
